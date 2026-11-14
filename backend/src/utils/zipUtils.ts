@@ -1,4 +1,5 @@
 import archiver from 'archiver';
+import { contentDisposition } from './contentDisposition';
 import { Response } from 'express';
 import axios from 'axios';
 import { logger } from './logger';
@@ -39,7 +40,7 @@ export const createZipStream = async (
 
     // Set response headers
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Disposition', contentDisposition(zipFilename));
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');

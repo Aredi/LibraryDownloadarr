@@ -37,6 +37,16 @@ export interface MediaItem {
   parentTitle?: string; // Season name for episodes, Album for tracks
   index?: number; // Episode number or Track number
   parentIndex?: number; // Season number
+  parentRatingKey?: string;
+  grandparentRatingKey?: string;
+  parentThumb?: string;
+  grandparentThumb?: string;
+  leafCount?: number; // Episode count (shows/seasons)
+  childCount?: number; // Season count (shows)
+  librarySectionID?: string | number;
+  librarySectionTitle?: string;
+  allowSync?: boolean | number | string;
+  Genre?: { tag: string }[];
   Media?: MediaPart[];
 }
 
@@ -51,6 +61,8 @@ export interface MediaPart {
   videoResolution: string;
   container: string;
   videoFrameRate: string;
+  audioCodec?: string;
+  audioChannels?: number;
   Part: Part[];
 }
 

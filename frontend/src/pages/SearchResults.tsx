@@ -1,80 +1,71 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
-import { MediaGrid } from '../components/MediaGrid';
+import { Layout } from '../components/Layout';
+import { MediaGrid, GridSkeleton } from '../components/MediaGrid';
 import { api } from '../services/api';
 import { MediaItem } from '../types';
-import { useMobileMenu } from '../hooks/useMobileMenu';
+
+const GROUPS: { label: string; types: string[] }[] = [
+  { label: 'Films', types: ['movie'] },
+  { label: 'Séries', types: ['show'] },
+  { label: 'Saisons', types: ['season'] },
+  { label: 'Épisodes', types: ['episode'] },
+  { label: 'Musique & livres audio', types: ['artist', 'album', 'track'] },
+];
 
 export const SearchResults: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const query = searchParams.get('q') || '';
+  const [params] = useSearchParams();
+  const query = (params.get('q') || '').trim();
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useMobileMenu();
 
   useEffect(() => {
-    if (query) {
-      performSearch();
-    }
-  }, [query]);
-
-  const performSearch = async () => {
-    if (!query.trim()) return;
-
-    if (query.trim().length < 2) {
-      setError('Search query must be at least 2 characters');
+    if (query.length < 2) {
+      setMedia([]);
+      setError(query ? 'Tape au moins 2 caractères.' : '');
       return;
     }
-
+    let cancelled = false;
     setIsLoading(true);
     setError('');
+    api
+      .searchMedia(query)
+      .then((r) => !cancelled && setMedia(r || []))
+      .catch((err) => !cancelled && setError(err.response?.data?.error || 'La recherche a échoué'))
+      .finally(() => !cancelled && setIsLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [query]);
 
-    try {
-      const results = await api.searchMedia(query);
-      setMedia(results || []);
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.error || 'Search failed';
-      const errorDetails = err.response?.data?.details;
-      setError(errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage);
-      setMedia([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const known = GROUPS.flatMap((g) => g.types);
+  const groups = [
+    ...GROUPS.map((g) => ({ label: g.label, items: media.filter((m) => g.types.includes(m.type)) })),
+    { label: 'Autres', items: media.filter((m) => !known.includes(m.type)) },
+  ].filter((g) => g.items.length > 0);
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header onMenuClick={toggleMobileMenu} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-          <div className="mb-4 md:mb-6">
-            <h1 className="text-2xl md:text-3xl font-bold mb-2">Search Results</h1>
-            {query && (
-              <p className="text-gray-400 text-sm md:text-base">
-                Showing results for: <span className="text-white font-medium">{query}</span>
-              </p>
-            )}
-          </div>
+    <Layout>
+      <h1 className="text-2xl md:text-3xl font-bold mb-1">Recherche</h1>
+      {query && <p className="text-sm text-gray-400 mb-6">Résultats pour « {query} »</p>}
 
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-3 md:px-4 py-2 md:py-3 rounded-lg mb-4 md:mb-6 text-sm md:text-base">
-              {error}
-            </div>
-          )}
+      {error && <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
 
-          {!isLoading && !error && media.length === 0 && query && (
-            <div className="text-center py-12">
-              <p className="text-gray-400 text-base md:text-lg">No results found for "{query}"</p>
-            </div>
-          )}
-
-          <MediaGrid media={media} isLoading={isLoading} />
-        </main>
-      </div>
-    </div>
+      {isLoading ? (
+        <GridSkeleton count={12} />
+      ) : groups.length > 0 ? (
+        groups.map((g) => (
+          <section key={g.label} className="mb-10">
+            <h2 className="text-lg font-semibold mb-3">
+              {g.label} <span className="text-gray-500 font-normal text-sm">{g.items.length}</span>
+            </h2>
+            <MediaGrid media={g.items} />
+          </section>
+        ))
+      ) : (
+        !error && query && <div className="py-20 text-center text-gray-500">Aucun résultat pour « {query} »</div>
+      )}
+    </Layout>
   );
 };

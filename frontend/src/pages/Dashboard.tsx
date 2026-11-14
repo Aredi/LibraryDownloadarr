@@ -1,114 +1,94 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
-import { MediaGrid } from '../components/MediaGrid';
+import { Link } from 'react-router-dom';
+import { Layout } from '../components/Layout';
+import { MediaCard } from '../components/MediaCard';
 import { api } from '../services/api';
-import { MediaItem } from '../types';
+import { Library, MediaItem } from '../types';
 import { useAuthStore } from '../stores/authStore';
-import { useMobileMenu } from '../hooks/useMobileMenu';
+import { formatBytes } from '../utils/format';
+
+const Row: React.FC<{ title: string; to: string; items: MediaItem[] }> = ({ title, to, items }) => (
+  <section className="mb-10">
+    <div className="flex items-baseline justify-between mb-3">
+      <h2 className="text-lg md:text-xl font-semibold">{title}</h2>
+      <Link to={to} className="text-sm text-primary-300 hover:text-primary-200">
+        Tout voir →
+      </Link>
+    </div>
+    <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 md:-mx-8 md:px-8 snap-x scroll-px-4 md:scroll-px-8 scrollbar-thin">
+      {items.map((m) => (
+        <div key={m.ratingKey} className="w-[120px] md:w-[150px] shrink-0 snap-start">
+          <MediaCard media={m} />
+        </div>
+      ))}
+    </div>
+  </section>
+);
 
 export const Dashboard: React.FC = () => {
-  const [recentlyAdded, setRecentlyAdded] = useState<MediaItem[]>([]);
-  const [stats, setStats] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useMobileMenu();
+  const [libraries, setLibraries] = useState<Library[]>([]);
+  const [recent, setRecent] = useState<MediaItem[]>([]);
+  const [stats, setStats] = useState<{ count?: number; total_size?: number } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Wait for user to be loaded
-    if (!user) {
-      return;
-    }
-
-    // Load dashboard for all users
-    loadDashboard();
+    if (!user) return;
+    Promise.all([
+      api.getLibraries(),
+      api.getRecentlyAdded(0, 24),
+      user.isAdmin ? api.getDownloadStats().catch(() => null) : Promise.resolve(null),
+    ])
+      .then(([libs, media, s]) => {
+        setLibraries(libs);
+        setRecent(media);
+        setStats(s);
+      })
+      .catch((e) => console.error('Failed to load dashboard', e))
+      .finally(() => setIsLoading(false));
   }, [user]);
 
-  const loadDashboard = async () => {
-    try {
-      const [media, downloadStats] = await Promise.all([
-        api.getRecentlyAdded(100),
-        api.getDownloadStats().catch(() => null),
-      ]);
-      setRecentlyAdded(media);
-      setStats(downloadStats);
-    } catch (error) {
-      console.error('Failed to load dashboard', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const formatBytes = (bytes: number | null) => {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-  };
+  const rows = libraries
+    .map((lib) => ({ lib, items: recent.filter((m) => String(m.librarySectionID) === lib.key).slice(0, 24) }))
+    .filter((r) => r.items.length > 0);
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header onMenuClick={toggleMobileMenu} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-          <div className="max-w-7xl mx-auto">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4 md:mb-6">Home</h2>
-
-            {user?.isAdmin && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-                <div className="card p-4 md:p-6">
-                  <div className="text-3xl md:text-4xl mb-3 md:mb-4">🎬</div>
-                  <h3 className="text-lg md:text-xl font-semibold mb-2">Browse Libraries</h3>
-                  <p className="text-gray-400 text-xs md:text-sm">
-                    Access all your Plex libraries with full metadata and artwork
-                  </p>
-                </div>
-
-                <div className="card p-4 md:p-6 cursor-pointer hover:border-primary-500 transition-colors" onClick={() => navigate('/admin/download-history')}>
-                  <div className="text-3xl md:text-4xl mb-3 md:mb-4">📊</div>
-                  <h3 className="text-lg md:text-xl font-semibold mb-2">Downloads</h3>
-                  {stats ? (
-                    <div className="text-xs md:text-sm space-y-1">
-                      <p className="text-gray-400">Total: {stats.count || 0}</p>
-                      <p className="text-gray-400">Size: {formatBytes(stats.total_size)}</p>
-                      <p className="text-primary-400 text-xs mt-2">Click to view history →</p>
-                    </div>
-                  ) : (
-                    <p className="text-gray-400 text-xs md:text-sm">Track your download history and stats</p>
-                  )}
-                </div>
-
-                <div className="card p-4 md:p-6 cursor-pointer hover:border-primary-500 transition-colors sm:col-span-2 md:col-span-1" onClick={() => navigate('/settings')}>
-                  <div className="text-3xl md:text-4xl mb-3 md:mb-4">⚙️</div>
-                  <h3 className="text-lg md:text-xl font-semibold mb-2">Settings</h3>
-                  <p className="text-gray-400 text-xs md:text-sm">
-                    Configure your Plex server connection
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {isLoading ? (
-              <div className="text-center text-gray-400 py-12">Loading...</div>
-            ) : recentlyAdded.length > 0 ? (
-              <div>
-                <h3 className="text-xl md:text-2xl font-bold mb-3 md:mb-4">Recently Added</h3>
-                <MediaGrid media={recentlyAdded} />
-              </div>
-            ) : (
-              <div className="card p-6 md:p-8 text-center">
-                <p className="text-gray-400 text-sm md:text-base">
-                  No recently added media found. Make sure your Plex server is configured in Settings.
-                </p>
-              </div>
-            )}
-          </div>
-        </main>
+    <Layout>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-8">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold">Bonjour {user?.username} 👋</h1>
+          <p className="text-sm text-gray-400 mt-1">Les derniers ajouts de chaque bibliothèque.</p>
+        </div>
+        {stats && (
+          <Link
+            to="/admin/download-history"
+            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm hover:border-primary-500/50"
+          >
+            <span className="text-gray-400">Téléchargements : </span>
+            <span className="font-semibold">{stats.count || 0}</span>
+            <span className="text-gray-500"> · {formatBytes(stats.total_size)}</span>
+          </Link>
+        )}
       </div>
-    </div>
+
+      {isLoading ? (
+        [0, 1].map((i) => (
+          <div key={i} className="mb-10">
+            <div className="h-5 w-40 rounded bg-white/5 animate-pulse mb-3" />
+            <div className="flex gap-4 overflow-hidden">
+              {Array.from({ length: 8 }).map((_, j) => (
+                <div key={j} className="w-[120px] md:w-[150px] shrink-0 aspect-[2/3] rounded-lg bg-white/5 animate-pulse" />
+              ))}
+            </div>
+          </div>
+        ))
+      ) : rows.length > 0 ? (
+        rows.map(({ lib, items }) => <Row key={lib.key} title={lib.title} to={`/library/${lib.key}`} items={items} />)
+      ) : (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center text-gray-400">
+          Aucun ajout récent. Vérifie la connexion au serveur Plex dans les paramètres.
+        </div>
+      )}
+    </Layout>
   );
 };

@@ -76,6 +76,7 @@ class ApiClient {
   }
 
   async logout(): Promise<void> {
+    this.librariesPromise = null;
     await this.client.post('/auth/logout');
     localStorage.removeItem('token');
   }
@@ -88,9 +89,20 @@ class ApiClient {
   }
 
   // Library endpoints
-  async getLibraries(): Promise<Library[]> {
-    const response = await this.client.get<{ libraries: Library[] }>('/libraries');
-    return response.data.libraries;
+  // Libraries rarely change: share one request between the sidebar and pages.
+  private librariesPromise: Promise<Library[]> | null = null;
+
+  getLibraries(): Promise<Library[]> {
+    if (!this.librariesPromise) {
+      this.librariesPromise = this.client
+        .get<{ libraries: Library[] }>('/libraries')
+        .then((r) => r.data.libraries)
+        .catch((err) => {
+          this.librariesPromise = null;
+          throw err;
+        });
+    }
+    return this.librariesPromise;
   }
 
   async getLibraryContent(libraryKey: string, viewType?: string): Promise<MediaItem[]> {
@@ -104,9 +116,10 @@ class ApiClient {
   }
 
   // Media endpoints
-  async getRecentlyAdded(limit: number = 20): Promise<MediaItem[]> {
+  /** perLibrary: the N newest items of every library instead of N overall. */
+  async getRecentlyAdded(limit: number = 20, perLibrary?: number): Promise<MediaItem[]> {
     const response = await this.client.get<{ media: MediaItem[] }>('/media/recently-added', {
-      params: { limit },
+      params: { limit, perLibrary },
     });
     return response.data.media;
   }
@@ -157,35 +170,42 @@ class ApiClient {
     return response.data.stats;
   }
 
+  // Download URLs below carry no credentials: DownloadContext adds a short-lived ticket
+  // (see getDownloadTicket) right before handing them to the browser.
   getDownloadUrl(ratingKey: string, partKey: string): string {
     return `/api/media/${ratingKey}/download?partKey=${encodeURIComponent(partKey)}`;
   }
 
-  async getSeasonSize(seasonRatingKey: string): Promise<{ totalSize: number; fileCount: number; totalSizeGB: string }> {
-    const response = await this.client.get<{ totalSize: number; fileCount: number; totalSizeGB: string }>(
-      `/media/season/${seasonRatingKey}/size`
-    );
-    return response.data;
-  }
-
-  async getAlbumSize(albumRatingKey: string): Promise<{ totalSize: number; fileCount: number; totalSizeGB: string }> {
-    const response = await this.client.get<{ totalSize: number; fileCount: number; totalSizeGB: string }>(
-      `/media/album/${albumRatingKey}/size`
-    );
-    return response.data;
+  /** check: verify first that this file may be downloaded; throws with the server's reason if not. */
+  async getDownloadTicket(check?: { ratingKey: string; partKey: string }): Promise<string> {
+    const response = await this.client.post<{ ticket: string }>('/media/download-ticket', check || {});
+    return response.data.ticket;
   }
 
   getSeasonDownloadUrl(seasonRatingKey: string): string {
     return `/api/media/season/${seasonRatingKey}/download`;
   }
 
+  getShowDownloadUrl(showRatingKey: string): string {
+    return `/api/media/show/${showRatingKey}/download`;
+  }
+
   getAlbumDownloadUrl(albumRatingKey: string): string {
     return `/api/media/album/${albumRatingKey}/download`;
   }
 
-  getThumbnailUrl(ratingKey: string, path: string): string {
+  /** One ZIP with the given episodes/tracks. */
+  getZipUrl(ratingKeys: string[]): string {
+    return `/api/media/zip?keys=${ratingKeys.join(',')}`;
+  }
+
+  /** width/height: ask Plex for a resized image (much lighter than the original). Height defaults to a 2:3 poster. */
+  getThumbnailUrl(ratingKey: string, path: string, width?: number, height?: number): string {
     const token = localStorage.getItem('token');
-    return `/api/media/thumb/${ratingKey}?path=${encodeURIComponent(path)}&token=${token}`;
+    const source = width
+      ? `/photo/:/transcode?width=${width}&height=${height || Math.round(width * 1.5)}&minSize=1&upscale=1&url=${encodeURIComponent(path)}`
+      : path;
+    return `/api/media/thumb/${ratingKey}?path=${encodeURIComponent(source)}&token=${token}`;
   }
 
   // Settings endpoints

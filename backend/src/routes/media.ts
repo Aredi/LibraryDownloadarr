@@ -2,11 +2,12 @@ import { Router } from 'express';
 import { DatabaseService } from '../models/database';
 import { plexService } from '../services/plexService';
 import { logger } from '../utils/logger';
-import { AuthRequest, createAuthMiddleware } from '../middleware/auth';
+import { AuthRequest, createAuthMiddleware, issueDownloadTicket } from '../middleware/auth';
 import axios from 'axios';
 import https from 'https';
 import path from 'path';
 import { createZipStream, ZipFileEntry } from '../utils/zipUtils';
+import { contentDisposition } from '../utils/contentDisposition';
 
 // HTTPS agent that bypasses SSL certificate validation for local Plex servers
 // This is necessary when connecting to Plex servers with self-signed certificates
@@ -18,6 +19,7 @@ const httpsAgent = new https.Agent({
 export const createMediaRouter = (db: DatabaseService) => {
   const router = Router();
   const authMiddleware = createAuthMiddleware(db);
+  const downloadAuth = createAuthMiddleware(db, { allowTicket: true });
 
   // Helper function to format media title for download logs
   const formatMediaTitle = (metadata: any, libraryTitle?: string): string => {
@@ -85,10 +87,138 @@ export const createMediaRouter = (db: DatabaseService) => {
     };
   };
 
+  // Plex marks items a shared user may not download with allowSync=false/0. Admins are never blocked.
+  const isBlocked = (req: AuthRequest, item: any) =>
+    !req.user?.isAdmin && (item?.allowSync === false || item?.allowSync === 0 || item?.allowSync === '0');
+
+  const BLOCKED_MESSAGE = 'Le téléchargement est désactivé pour ton compte sur ce serveur.';
+
+  /**
+   * Streams a ZIP of the given episodes/tracks after checking permissions, and logs the download.
+   * folderOf: optional sub-folder inside the ZIP for each item (e.g. one folder per season).
+   */
+  const sendZip = async (
+    req: AuthRequest,
+    res: any,
+    opts: { items: any[]; token: string; zipFilename: string; logTitle: string; logKey: string; folderOf?: (item: any) => string }
+  ) => {
+    const { items, token } = opts;
+    if (items.length === 0) {
+      return res.status(404).json({ error: 'Aucun fichier à télécharger.' });
+    }
+    const blocked = items.find((i) => isBlocked(req, i));
+    if (blocked) {
+      logger.warn('ZIP download denied: user lacks download permission', { userId: req.user?.id, ratingKey: blocked.ratingKey });
+      return res.status(403).json({ error: BLOCKED_MESSAGE });
+    }
+
+    const files: ZipFileEntry[] = [];
+    for (const item of items) {
+      const part = item.Media?.[0]?.Part?.[0];
+      if (!part) continue;
+      const name = path.basename(part.file || '') || `${item.index ?? item.ratingKey}.${part.container}`;
+      files.push({
+        url: plexService.getDownloadUrl(part.key, token),
+        filename: opts.folderOf ? `${opts.folderOf(item)}/${name}` : name,
+        size: part.size || 0,
+      });
+    }
+    const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+
+    db.logDownload(req.user!.id, `${opts.logTitle} (${files.length} fichiers)`, opts.logKey, totalSize);
+    logger.info(`ZIP download started: ${opts.logTitle} by user ${req.user?.username}`, { files: files.length, totalSize });
+    await createZipStream(res, files, opts.zipFilename);
+  };
+
+  // Resolves Plex credentials for a download route, or answers with an error. Returns the token or null.
+  const plexTokenFor = (req: AuthRequest, res: any): string | null => {
+    const { token, serverUrl, error } = getUserCredentials(req);
+    if (error || !token || !serverUrl) {
+      res.status(error ? 403 : 401).json({ error: error || 'Plex token required - configure in settings' });
+      return null;
+    }
+    plexService.setServerConnection(serverUrl, token);
+    return token;
+  };
+
+  const zipRoute = (name: string, handler: (req: AuthRequest, res: any, token: string) => Promise<unknown>) =>
+    async (req: AuthRequest, res: any) => {
+      try {
+        const token = plexTokenFor(req, res);
+        if (token) await handler(req, res, token);
+      } catch (error) {
+        logger.error(`${name} download failed`, { error });
+        if (!res.headersSent) res.status(500).json({ error: 'Le téléchargement a échoué.' });
+      }
+    };
+
+  const pad2 = (n: unknown) => String(n ?? 0).padStart(2, '0');
+
+  // Whole season as one ZIP
+  router.get('/season/:seasonRatingKey/download', downloadAuth, zipRoute('Season', async (req, res, token) => {
+    const { seasonRatingKey } = req.params;
+    const season = await plexService.getMediaMetadata(seasonRatingKey, token);
+    const show = season.parentTitle || season.grandparentTitle || 'Série';
+    await sendZip(req, res, {
+      items: await plexService.getEpisodes(seasonRatingKey, token),
+      token,
+      zipFilename: `${show} - S${pad2(season.index)}.zip`,
+      logTitle: `${season.librarySectionTitle || 'Bibliothèque'} - ${show} - ${season.title}`,
+      logKey: seasonRatingKey,
+    });
+  }));
+
+  // Every episode of a show as one ZIP, one folder per season
+  router.get('/show/:showRatingKey/download', downloadAuth, zipRoute('Show', async (req, res, token) => {
+    const { showRatingKey } = req.params;
+    const show = await plexService.getMediaMetadata(showRatingKey, token);
+    await sendZip(req, res, {
+      items: await plexService.getAllEpisodes(showRatingKey, token),
+      token,
+      zipFilename: `${show.title}.zip`,
+      logTitle: `${show.librarySectionTitle || 'Bibliothèque'} - ${show.title} - série complète`,
+      logKey: showRatingKey,
+      folderOf: (ep) => `Saison ${pad2(ep.parentIndex)}`,
+    });
+  }));
+
+  // Whole album as one ZIP
+  router.get('/album/:albumRatingKey/download', downloadAuth, zipRoute('Album', async (req, res, token) => {
+    const { albumRatingKey } = req.params;
+    const album = await plexService.getMediaMetadata(albumRatingKey, token);
+    await sendZip(req, res, {
+      items: await plexService.getTracks(albumRatingKey, token),
+      token,
+      zipFilename: `${album.title}.zip`,
+      logTitle: `${album.librarySectionTitle || 'Bibliothèque'} - ${album.title}`,
+      logKey: albumRatingKey,
+    });
+  }));
+
+  // Hand-picked episodes/tracks as one ZIP: /zip?keys=1,2,3
+  router.get('/zip', downloadAuth, zipRoute('Selection', async (req, res, token) => {
+    const keys = String(req.query.keys || '').split(',').filter((k) => /^\d+$/.test(k));
+    if (keys.length === 0 || keys.length > 1000) {
+      return res.status(400).json({ error: 'Sélection invalide.' });
+    }
+    const items = await plexService.getMetadataBatch(keys, token);
+    const first = items[0] || {};
+    const parent = first.type === 'episode' ? `${first.grandparentTitle} - S${pad2(first.parentIndex)}` : first.parentTitle || 'Sélection';
+    return sendZip(req, res, {
+      items,
+      token,
+      zipFilename: `${parent} (${items.length} fichiers).zip`,
+      logTitle: `${first.librarySectionTitle || 'Bibliothèque'} - ${parent} - sélection`,
+      logKey: keys[0],
+    });
+  }));
+
   // Get recently added media
   router.get('/recently-added', authMiddleware, async (req: AuthRequest, res) => {
     try {
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      // perLibrary=N: N newest items of every library (capped to keep Plex requests small)
+      const perLibrary = req.query.perLibrary ? Math.min(parseInt(req.query.perLibrary as string) || 0, 50) : undefined;
       const { token, serverUrl, error } = getUserCredentials(req);
 
       if (error) {
@@ -100,7 +230,7 @@ export const createMediaRouter = (db: DatabaseService) => {
       }
 
       plexService.setServerConnection(serverUrl, token);
-      const media = await plexService.getRecentlyAdded(token, limit);
+      const media = await plexService.getRecentlyAdded(token, limit, perLibrary);
       return res.json({ media });
     } catch (error) {
       logger.error('Failed to get recently added', { error });
@@ -360,7 +490,45 @@ export const createMediaRouter = (db: DatabaseService) => {
   });
 
   // Download media
-  router.get('/:ratingKey/download', authMiddleware, async (req: AuthRequest, res) => {
+  // Issue a short-lived download ticket. When a file is given, check first that the user may
+  // download it (and that Plex agrees), so the UI can show the real reason instead of a silent
+  // browser download failure.
+  router.post('/download-ticket', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { ratingKey, partKey } = req.body || {};
+      if (ratingKey && partKey) {
+        const { token, serverUrl, error } = getUserCredentials(req);
+        if (error || !token || !serverUrl) {
+          return res.status(403).json({ error: error || 'Accès Plex non configuré.' });
+        }
+        plexService.setServerConnection(serverUrl, token);
+        const metadata = await plexService.getMediaMetadata(String(ratingKey), token);
+        if (isBlocked(req, metadata)) {
+          return res.status(403).json({ error: BLOCKED_MESSAGE });
+        }
+        // Ask Plex for the first byte only: cheap way to know if it will serve the file
+        const probe = await axios.get(plexService.getDownloadUrl(String(partKey), token), {
+          headers: { Range: 'bytes=0-0' },
+          responseType: 'stream',
+          httpsAgent,
+          validateStatus: () => true,
+        });
+        probe.data.destroy();
+        if (probe.status === 403 || probe.status === 401) {
+          return res.status(403).json({ error: 'Plex refuse ce téléchargement : vérifie tes droits de téléchargement dans Plex.' });
+        }
+        if (probe.status >= 400) {
+          return res.status(502).json({ error: `Plex ne trouve pas ce fichier (erreur ${probe.status}).` });
+        }
+      }
+      return res.json({ ticket: issueDownloadTicket(req.authSession!.token) });
+    } catch (error) {
+      logger.error('Failed to issue download ticket', { error });
+      return res.status(500).json({ error: 'Impossible de préparer le téléchargement.' });
+    }
+  });
+
+  router.get('/:ratingKey/download', downloadAuth, async (req: AuthRequest, res) => {
     try {
       const { ratingKey } = req.params;
       const { partKey } = req.query;
@@ -400,22 +568,15 @@ export const createMediaRouter = (db: DatabaseService) => {
       // - Admin users: always allowed (they manage the server)
       // - Owned server users: allowSync undefined = allowed (no restriction)
       // - Shared server users: allowSync false/0 = explicitly disabled
-      const isExplicitlyDisabled = metadata.allowSync === false ||
-                                   metadata.allowSync === 0 ||
-                                   metadata.allowSync === '0';
-
-      if (isExplicitlyDisabled && !req.user?.isAdmin) {
+      if (isBlocked(req, metadata)) {
         logger.warn('Download denied: user lacks download permission', {
           userId: req.user?.id,
           username: req.user?.username,
-          isAdmin: req.user?.isAdmin,
           ratingKey,
           mediaTitle: metadata.title,
           allowSync: metadata.allowSync
         });
-        return res.status(403).json({
-          error: 'Download not allowed. The server administrator has disabled downloads for your account.'
-        });
+        return res.status(403).json({ error: BLOCKED_MESSAGE });
       }
 
       // Get library information for better download title
@@ -481,8 +642,10 @@ export const createMediaRouter = (db: DatabaseService) => {
       );
 
       // Set headers for download
-      const filename = metadata.Media?.[0]?.Part?.[0]?.file.split('/').pop() || 'download';
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      const allParts = (metadata.Media || []).flatMap((m: any) => m.Part || []);
+      const part = allParts.find((p: any) => p.key === partKey) || allParts[0];
+      const filename = part?.file ? path.basename(part.file) : 'download';
+      res.setHeader('Content-Disposition', contentDisposition(filename));
       res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
       if (fileSize) {
         res.setHeader('Content-Length', fileSize.toString());
@@ -496,320 +659,6 @@ export const createMediaRouter = (db: DatabaseService) => {
       logger.error('Download failed', { error });
       if (!res.headersSent) {
         return res.status(500).json({ error: 'Download failed' });
-      }
-      return;
-    }
-  });
-
-  // Get season download size info
-  router.get('/season/:seasonRatingKey/size', authMiddleware, async (req: AuthRequest, res) => {
-    try {
-      const { seasonRatingKey } = req.params;
-      const { token, serverUrl, error } = getUserCredentials(req);
-
-      if (error) {
-        return res.status(403).json({ error });
-      }
-
-      if (!token || !serverUrl) {
-        return res.status(401).json({ error: 'Plex token required - configure in settings' });
-      }
-
-      plexService.setServerConnection(serverUrl, token);
-
-      // Get all episodes in the season
-      const episodes = await plexService.getEpisodes(seasonRatingKey, token);
-
-      if (!episodes || episodes.length === 0) {
-        return res.status(404).json({ error: 'No episodes found in this season' });
-      }
-
-      // Calculate total size
-      let totalSize = 0;
-      let fileCount = 0;
-
-      for (const episode of episodes) {
-        if (episode.Media?.[0]?.Part?.[0]) {
-          const part = episode.Media[0].Part[0];
-          totalSize += part.size || 0;
-          fileCount++;
-        }
-      }
-
-      return res.json({
-        totalSize,
-        fileCount,
-        totalSizeGB: (totalSize / 1073741824).toFixed(2)
-      });
-    } catch (error) {
-      logger.error('Failed to get season size', { error });
-      return res.status(500).json({ error: 'Failed to get season size' });
-    }
-  });
-
-  // Get album download size info
-  router.get('/album/:albumRatingKey/size', authMiddleware, async (req: AuthRequest, res) => {
-    try {
-      const { albumRatingKey } = req.params;
-      const { token, serverUrl, error } = getUserCredentials(req);
-
-      if (error) {
-        return res.status(403).json({ error });
-      }
-
-      if (!token || !serverUrl) {
-        return res.status(401).json({ error: 'Plex token required - configure in settings' });
-      }
-
-      plexService.setServerConnection(serverUrl, token);
-
-      // Get all tracks in the album
-      const tracks = await plexService.getTracks(albumRatingKey, token);
-
-      if (!tracks || tracks.length === 0) {
-        return res.status(404).json({ error: 'No tracks found in this album' });
-      }
-
-      // Calculate total size
-      let totalSize = 0;
-      let fileCount = 0;
-
-      for (const track of tracks) {
-        if (track.Media?.[0]?.Part?.[0]) {
-          const part = track.Media[0].Part[0];
-          totalSize += part.size || 0;
-          fileCount++;
-        }
-      }
-
-      return res.json({
-        totalSize,
-        fileCount,
-        totalSizeGB: (totalSize / 1073741824).toFixed(2)
-      });
-    } catch (error) {
-      logger.error('Failed to get album size', { error });
-      return res.status(500).json({ error: 'Failed to get album size' });
-    }
-  });
-
-  // Download entire season as zip
-  router.get('/season/:seasonRatingKey/download', authMiddleware, async (req: AuthRequest, res) => {
-    try {
-      const { seasonRatingKey } = req.params;
-
-      const { token, serverUrl, error } = getUserCredentials(req);
-
-      if (error) {
-        return res.status(403).json({ error });
-      }
-
-      if (!token || !serverUrl) {
-        return res.status(401).json({ error: 'Plex token required - configure in settings' });
-      }
-
-      plexService.setServerConnection(serverUrl, token);
-
-      // Get season metadata
-      const seasonMetadata = await plexService.getMediaMetadata(seasonRatingKey, token);
-
-      // Get all episodes in the season
-      const episodes = await plexService.getEpisodes(seasonRatingKey, token);
-
-      if (!episodes || episodes.length === 0) {
-        return res.status(404).json({ error: 'No episodes found in this season' });
-      }
-
-      // Check download permissions for each episode
-      // Admin users bypass permission checks
-      const isAdmin = req.user?.isAdmin;
-      if (!isAdmin) {
-        for (const episode of episodes) {
-          const isExplicitlyDisabled = episode.allowSync === false ||
-                                       episode.allowSync === 0 ||
-                                       episode.allowSync === '0';
-          if (isExplicitlyDisabled) {
-            logger.warn('Season download denied: user lacks download permission for at least one episode', {
-              userId: req.user?.id,
-              seasonRatingKey,
-              episodeRatingKey: episode.ratingKey,
-              episodeTitle: episode.title
-            });
-            return res.status(403).json({
-              error: 'Download not allowed. Some episodes in this season are not available for download.'
-            });
-          }
-        }
-      }
-
-      // Prepare files for zipping
-      const files: ZipFileEntry[] = [];
-      let totalSize = 0;
-
-      for (const episode of episodes) {
-        if (episode.Media?.[0]?.Part?.[0]) {
-          const part = episode.Media[0].Part[0];
-          const downloadUrl = plexService.getDownloadUrl(part.key, token);
-          // Use path.basename to ensure we only get the filename, not the full path
-          const filename = path.basename(part.file) || `Episode_${episode.index}.${part.container}`;
-          const size = part.size || 0;
-
-          files.push({
-            url: downloadUrl,
-            filename,
-            size
-          });
-
-          totalSize += size;
-        }
-      }
-
-      // Warn if total size is over 10GB (10737418240 bytes)
-      const tenGB = 10737418240;
-      if (totalSize > tenGB) {
-        logger.warn('Large season download initiated', {
-          userId: req.user?.id,
-          seasonRatingKey,
-          totalSizeGB: (totalSize / 1073741824).toFixed(2),
-          episodeCount: files.length
-        });
-      }
-
-      // Generate zip filename: "ShowName - SXX.zip"
-      const showName = seasonMetadata.grandparentTitle || 'Unknown Show';
-      const seasonNumber = seasonMetadata.index || seasonMetadata.parentIndex || 0;
-      const zipFilename = `${showName} - S${String(seasonNumber).padStart(2, '0')}.zip`;
-
-      // Log the download
-      const libraryTitle = seasonMetadata.librarySectionTitle || 'Unknown Library';
-      const downloadTitle = `${libraryTitle} - ${showName} - ${seasonMetadata.title} (${files.length} episodes)`;
-      db.logDownload(
-        req.user!.id,
-        downloadTitle,
-        seasonRatingKey,
-        totalSize
-      );
-
-      logger.info(`Season download started: ${downloadTitle} by user ${req.user?.username}`);
-
-      // Stream zip to client
-      await createZipStream(res, files, zipFilename);
-
-      return;
-    } catch (error) {
-      logger.error('Season download failed', { error });
-      if (!res.headersSent) {
-        return res.status(500).json({ error: 'Season download failed' });
-      }
-      return;
-    }
-  });
-
-  // Download entire album as zip
-  router.get('/album/:albumRatingKey/download', authMiddleware, async (req: AuthRequest, res) => {
-    try {
-      const { albumRatingKey } = req.params;
-
-      const { token, serverUrl, error } = getUserCredentials(req);
-
-      if (error) {
-        return res.status(403).json({ error });
-      }
-
-      if (!token || !serverUrl) {
-        return res.status(401).json({ error: 'Plex token required - configure in settings' });
-      }
-
-      plexService.setServerConnection(serverUrl, token);
-
-      // Get album metadata
-      const albumMetadata = await plexService.getMediaMetadata(albumRatingKey, token);
-
-      // Get all tracks in the album
-      const tracks = await plexService.getTracks(albumRatingKey, token);
-
-      if (!tracks || tracks.length === 0) {
-        return res.status(404).json({ error: 'No tracks found in this album' });
-      }
-
-      // Check download permissions for each track
-      // Admin users bypass permission checks
-      const isAdmin = req.user?.isAdmin;
-      if (!isAdmin) {
-        for (const track of tracks) {
-          const isExplicitlyDisabled = track.allowSync === false ||
-                                       track.allowSync === 0 ||
-                                       track.allowSync === '0';
-          if (isExplicitlyDisabled) {
-            logger.warn('Album download denied: user lacks download permission for at least one track', {
-              userId: req.user?.id,
-              albumRatingKey,
-              trackRatingKey: track.ratingKey,
-              trackTitle: track.title
-            });
-            return res.status(403).json({
-              error: 'Download not allowed. Some tracks in this album are not available for download.'
-            });
-          }
-        }
-      }
-
-      // Prepare files for zipping
-      const files: ZipFileEntry[] = [];
-      let totalSize = 0;
-
-      for (const track of tracks) {
-        if (track.Media?.[0]?.Part?.[0]) {
-          const part = track.Media[0].Part[0];
-          const downloadUrl = plexService.getDownloadUrl(part.key, token);
-          // Use path.basename to ensure we only get the filename, not the full path
-          const filename = path.basename(part.file) || `Track_${track.index}.${part.container}`;
-          const size = part.size || 0;
-
-          files.push({
-            url: downloadUrl,
-            filename,
-            size
-          });
-
-          totalSize += size;
-        }
-      }
-
-      // Warn if total size is over 10GB (10737418240 bytes)
-      const tenGB = 10737418240;
-      if (totalSize > tenGB) {
-        logger.warn('Large album download initiated', {
-          userId: req.user?.id,
-          albumRatingKey,
-          totalSizeGB: (totalSize / 1073741824).toFixed(2),
-          trackCount: files.length
-        });
-      }
-
-      // Generate zip filename: "Album.zip"
-      const zipFilename = `${albumMetadata.title}.zip`;
-
-      // Log the download
-      const libraryTitle = albumMetadata.librarySectionTitle || 'Unknown Library';
-      const downloadTitle = `${libraryTitle} - ${albumMetadata.title} (${files.length} tracks)`;
-      db.logDownload(
-        req.user!.id,
-        downloadTitle,
-        albumRatingKey,
-        totalSize
-      );
-
-      logger.info(`Album download started: ${downloadTitle} by user ${req.user?.username}`);
-
-      // Stream zip to client
-      await createZipStream(res, files, zipFilename);
-
-      return;
-    } catch (error) {
-      logger.error('Album download failed', { error });
-      if (!res.headersSent) {
-        return res.status(500).json({ error: 'Album download failed' });
       }
       return;
     }
@@ -877,9 +726,9 @@ export const createMediaRouter = (db: DatabaseService) => {
       });
 
       res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
-      if (response.headers['content-length']) {
-        res.setHeader('Content-Length', response.headers['content-length']);
-      }
+      // No Content-Length: axios may decompress the stream, so Plex's length can be wrong.
+      // Images are immutable per path, let the browser keep them for a day.
+      res.setHeader('Cache-Control', 'private, max-age=86400');
 
       response.data.pipe(res);
       return;

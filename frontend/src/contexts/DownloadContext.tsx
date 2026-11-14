@@ -1,192 +1,100 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useRef, useState, ReactNode } from 'react';
 import { api } from '../services/api';
 
-interface Download {
-  id: string;
-  ratingKey: string;
-  partKey: string;
-  filename: string;
-  title: string;
-  progress: number;
-  status: 'downloading' | 'completed' | 'error';
-  error?: string;
-  isBulkDownload?: boolean; // True for season/album zips (no progress tracking)
+export interface DownloadRequest {
+  url: string; // api.getDownloadUrl & co, without credentials
+  label: string; // shown to the user
+  size?: number; // bytes, used for the big-download warning
+  check?: { ratingKey: string; partKey: string }; // single file: ask the server first if it may be downloaded
+}
+
+interface Toast {
+  id: number;
+  message: string;
+  tone: 'info' | 'success' | 'error';
 }
 
 interface DownloadContextType {
-  downloads: Download[];
-  startDownload: (ratingKey: string, partKey: string, filename: string, title: string) => Promise<void>;
-  removeDownload: (id: string) => void;
+  /** Hands files to the browser's own download manager. Resolves false if nothing was started. */
+  download: (requests: DownloadRequest[]) => Promise<boolean>;
+  notify: (message: string, tone?: Toast['tone']) => void;
+  toasts: Toast[];
+  dismiss: (id: number) => void;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
 
 export const useDownloads = () => {
   const context = useContext(DownloadContext);
-  if (!context) {
-    throw new Error('useDownloads must be used within a DownloadProvider');
-  }
+  if (!context) throw new Error('useDownloads must be used within a DownloadProvider');
   return context;
 };
 
-interface DownloadProviderProps {
-  children: ReactNode;
-}
+const BIG_DOWNLOAD = 20 * 1024 ** 3; // 20 Go
 
-export const DownloadProvider: React.FC<DownloadProviderProps> = ({ children }) => {
-  const [downloads, setDownloads] = useState<Download[]>([]);
+const triggerBrowserDownload = (url: string) => {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = ''; // filename comes from the server's Content-Disposition
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
 
-  // Warn user before closing/refreshing if downloads are in progress
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      const activeDownloads = downloads.filter(d => d.status === 'downloading');
+export const DownloadProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextId = useRef(1);
 
-      if (activeDownloads.length > 0) {
-        // Standard way to show browser confirmation dialog
-        e.preventDefault();
-        e.returnValue = ''; // Chrome requires returnValue to be set
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
+  const notify = useCallback(
+    (message: string, tone: Toast['tone'] = 'info') => {
+      const id = nextId.current++;
+      setToasts((t) => [...t.slice(-3), { id, message, tone }]);
+      setTimeout(() => dismiss(id), tone === 'error' ? 8000 : 4500);
+    },
+    [dismiss]
+  );
+
+  const download = useCallback(
+    async (requests: DownloadRequest[]) => {
+      if (requests.length === 0) return false;
+      const total = requests.reduce((s, r) => s + (r.size || 0), 0);
+      if (total > BIG_DOWNLOAD) {
+        const go = window.confirm(
+          `Ce téléchargement fait ${(total / 1024 ** 3).toFixed(1)} Go. Ça peut prendre du temps.\n\nContinuer ?`
+        );
+        if (!go) return false;
       }
-    };
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [downloads]);
-
-  const startDownload = async (
-    ratingKey: string,
-    partKey: string,
-    filename: string,
-    title: string
-  ): Promise<void> => {
-    const downloadId = `${ratingKey}-${partKey}-${Date.now()}`;
-
-    // Check if this is a bulk download (season or album ZIP)
-    const isBulkDownload = partKey.includes('/season/') || partKey.includes('/album/');
-
-    // Add download to state
-    const newDownload: Download = {
-      id: downloadId,
-      ratingKey,
-      partKey,
-      filename,
-      title,
-      progress: 0,
-      status: 'downloading',
-      isBulkDownload,
-    };
-
-    setDownloads((prev) => [...prev, newDownload]);
-
-    try {
-      // Check if partKey is already a full URL (for bulk downloads) or a path fragment
-      const downloadUrl = partKey.startsWith('/api/')
-        ? partKey // Already a full URL for bulk downloads
-        : api.getDownloadUrl(ratingKey, partKey); // Single file download
-
-      // Fetch with progress tracking
-      const response = await fetch(downloadUrl, {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
+      // One short-lived ticket per file; the server also checks permissions here,
+      // so refusals show up as a readable message instead of a failed browser download.
+      const results = await Promise.allSettled(requests.map((r) => api.getDownloadTicket(r.check)));
+      const started: string[] = [];
+      results.forEach((result, i) => {
+        const r = requests[i];
+        if (result.status === 'fulfilled') {
+          // Space out multiple files: browsers ignore several downloads fired in the same tick.
+          setTimeout(() => triggerBrowserDownload(`${r.url}${r.url.includes('?') ? '&' : '?'}ticket=${result.value}`), started.length * 800);
+          started.push(r.label);
+        } else {
+          const reason = (result.reason as any)?.response?.data?.error || 'Impossible de préparer le téléchargement.';
+          notify(requests.length > 1 ? `${r.label} : ${reason}` : reason, 'error');
+        }
       });
 
-      if (!response.ok) {
-        // Try to extract error message from JSON response
-        let errorMessage = 'Download failed';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          // If JSON parsing fails, use status text
-          errorMessage = response.statusText || errorMessage;
-        }
-        throw new Error(errorMessage);
+      if (started.length === 1) notify(`Téléchargement lancé : ${started[0]}`, 'success');
+      if (started.length > 1) {
+        notify(`${started.length} téléchargements lancés`, 'success');
+        notify('Si ton navigateur le demande, autorise les téléchargements multiples.', 'info');
       }
-
-      const contentLength = response.headers.get('content-length');
-      const total = contentLength ? parseInt(contentLength, 10) : 0;
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('Stream not available');
-      }
-
-      const chunks: Uint8Array[] = [];
-      let receivedLength = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) break;
-
-        chunks.push(value);
-        receivedLength += value.length;
-
-        // Update progress - only for non-bulk downloads with known size
-        // Bulk downloads (zips) don't have Content-Length, so we can't track progress
-        if (!isBulkDownload && total > 0) {
-          const progress = Math.round((receivedLength / total) * 100);
-          setDownloads((prev) =>
-            prev.map((d) =>
-              d.id === downloadId
-                ? { ...d, progress }
-                : d
-            )
-          );
-        }
-      }
-
-      // Create blob and download
-      const blob = new Blob(chunks as BlobPart[]);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      // Mark as completed
-      setDownloads((prev) =>
-        prev.map((d) =>
-          d.id === downloadId
-            ? { ...d, status: 'completed', progress: 100 }
-            : d
-        )
-      );
-
-      // Remove after 3 seconds
-      setTimeout(() => {
-        setDownloads((prev) => prev.filter((d) => d.id !== downloadId));
-      }, 3000);
-    } catch (error: any) {
-      // Mark as error
-      setDownloads((prev) =>
-        prev.map((d) =>
-          d.id === downloadId
-            ? { ...d, status: 'error', error: error.message }
-            : d
-        )
-      );
-
-      // Remove after 5 seconds
-      setTimeout(() => {
-        setDownloads((prev) => prev.filter((d) => d.id !== downloadId));
-      }, 5000);
-    }
-  };
-
-  const removeDownload = (id: string) => {
-    setDownloads((prev) => prev.filter((d) => d.id !== id));
-  };
+      return started.length > 0;
+    },
+    [notify]
+  );
 
   return (
-    <DownloadContext.Provider value={{ downloads, startDownload, removeDownload }}>
-      {children}
-    </DownloadContext.Provider>
+    <DownloadContext.Provider value={{ download, notify, toasts, dismiss }}>{children}</DownloadContext.Provider>
   );
 };

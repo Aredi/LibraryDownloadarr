@@ -1,156 +1,112 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
-import { useNavigate } from 'react-router-dom';
+import { IconLogout, IconMenu, IconSearch, IconSettings } from './Icons';
 
-interface HeaderProps {
-  onMenuClick?: () => void;
-}
-
-export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
+export const Header: React.FC<{ onMenuClick?: () => void }> = ({ onMenuClick }) => {
   const { user, logout } = useAuthStore();
-  const [showMenu, setShowMenu] = useState(false);
-  const [showMobileSearch, setShowMobileSearch] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const [query, setQuery] = useState(location.pathname === '/search' ? params.get('q') || '' : '');
+  const [showMenu, setShowMenu] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
-  };
+  // "/" focuses search, like most media apps
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (e.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
-  const handleSearch = (value: string) => {
-    if (value) {
-      navigate(`/search?q=${encodeURIComponent(value)}`);
-      setShowMobileSearch(false);
+  useEffect(() => {
+    if (!showMenu) return;
+    const close = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setShowMenu(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [showMenu]);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = query.trim();
+    if (q) {
+      navigate(`/search?q=${encodeURIComponent(q)}`);
+      inputRef.current?.blur();
     }
   };
 
   return (
-    <header className="bg-dark-100 border-b border-dark-50 px-4 md:px-6" style={{
-      paddingTop: 'calc(0.75rem + env(safe-area-inset-top))',
-      paddingBottom: '0.75rem',
-    }}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          {/* Hamburger Menu Button (Mobile) */}
-          {onMenuClick && (
-            <button
-              onClick={onMenuClick}
-              className="md:hidden p-2 hover:bg-dark-200 rounded-lg transition-colors"
-              aria-label="Toggle menu"
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path d="M4 6h16M4 12h16M4 18h16"></path>
-              </svg>
-            </button>
-          )}
-
-          <h1 className="text-xl md:text-2xl font-bold bg-gradient-to-r from-primary-500 to-secondary-500 bg-clip-text text-transparent">
-            LibraryDownloadarr
-          </h1>
-        </div>
-
-        <div className="flex items-center space-x-2 md:space-x-4">
-          {/* Desktop Search Bar */}
-          <div className="hidden md:block">
-            <input
-              type="text"
-              placeholder="Search media..."
-              className="input w-64"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleSearch(e.currentTarget.value);
-                }
-              }}
-            />
-          </div>
-
-          {/* Mobile Search Button */}
-          <button
-            onClick={() => setShowMobileSearch(!showMobileSearch)}
-            className="md:hidden p-2 hover:bg-dark-200 rounded-lg transition-colors"
-            aria-label="Search"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-            </svg>
-          </button>
-
-          {/* User Menu */}
-          <div className="relative">
-            <button
-              onClick={() => setShowMenu(!showMenu)}
-              className="flex items-center space-x-2 px-2 md:px-3 py-2 rounded-lg hover:bg-dark-200 transition-colors"
-            >
-              <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                {user?.username.charAt(0).toUpperCase()}
-              </div>
-              <span className="hidden md:block text-sm font-medium">{user?.username}</span>
-            </button>
-
-            {showMenu && (
-              <div className="absolute right-0 mt-2 w-48 bg-dark-100 rounded-lg shadow-xl border border-dark-50 py-2 z-50">
-                {user?.isAdmin && (
-                  <button
-                    onClick={() => {
-                      navigate('/settings');
-                      setShowMenu(false);
-                    }}
-                    className="w-full text-left px-4 py-2 hover:bg-dark-200 transition-colors text-sm"
-                  >
-                    Settings
-                  </button>
-                )}
-                <button
-                  onClick={handleLogout}
-                  className="w-full text-left px-4 py-2 hover:bg-dark-200 transition-colors text-red-400 text-sm"
-                >
-                  Logout
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile Search Bar (Expandable) */}
-      {showMobileSearch && (
-        <div className="mt-3 md:hidden">
-          <input
-            type="text"
-            placeholder="Search media..."
-            className="input w-full"
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                handleSearch(e.currentTarget.value);
-              }
-              if (e.key === 'Escape') {
-                setShowMobileSearch(false);
-              }
-            }}
-            onBlur={() => {
-              // Delay to allow click events to fire
-              setTimeout(() => setShowMobileSearch(false), 200);
-            }}
-          />
-        </div>
+    <header
+      className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/5 bg-dark/80 backdrop-blur px-3 md:px-8"
+      style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))', paddingBottom: '0.75rem' }}
+    >
+      {onMenuClick && (
+        <button onClick={onMenuClick} className="md:hidden p-2 -ml-1 rounded-lg hover:bg-white/5" aria-label="Menu">
+          <IconMenu className="w-6 h-6" />
+        </button>
       )}
+
+      <form onSubmit={submit} className="flex-1 max-w-xl">
+        <label className="relative block">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+            <IconSearch className="w-4 h-4" />
+          </span>
+          <input
+            ref={inputRef}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && inputRef.current?.blur()}
+            placeholder="Rechercher un film, une série, un album…"
+            className="w-full rounded-full bg-white/5 border border-white/10 pl-9 pr-4 py-2 text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:bg-white/10"
+          />
+          <kbd className="hidden md:block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 border border-white/10 rounded px-1.5">/</kbd>
+        </label>
+      </form>
+
+      <div className="relative ml-auto" ref={menuRef}>
+        <button
+          onClick={() => setShowMenu((v) => !v)}
+          className="flex items-center gap-2 rounded-full p-1 md:pr-3 hover:bg-white/5"
+          aria-label="Compte"
+        >
+          <span className="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-sm font-semibold">
+            {user?.username.charAt(0).toUpperCase()}
+          </span>
+          <span className="hidden md:block text-sm text-gray-300 max-w-[10rem] truncate">{user?.username}</span>
+        </button>
+
+        {showMenu && (
+          <div className="absolute right-0 mt-2 w-52 rounded-xl border border-white/10 bg-dark-100 shadow-2xl py-1.5 z-50">
+            {user?.isAdmin && (
+              <button
+                onClick={() => navigate('/settings')}
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-white/5"
+              >
+                <IconSettings className="w-4 h-4" /> Paramètres
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                await logout();
+                navigate('/login');
+              }}
+              className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-400 hover:bg-white/5"
+            >
+              <IconLogout className="w-4 h-4" /> Se déconnecter
+            </button>
+          </div>
+        )}
+      </div>
     </header>
   );
 };
