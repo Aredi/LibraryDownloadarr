@@ -34,9 +34,8 @@ export const createZipStream = async (
     let bytesWritten = 0;
 
     // Create archiver instance
-    const archive = archiver('zip', {
-      zlib: { level: 0 } // No compression for faster streaming (media files are already compressed)
-    });
+    // store: no deflate pass at all (media files are already compressed, zlib level 0 still costs CPU)
+    const archive = archiver('zip', { store: true });
 
     // Set response headers
     res.setHeader('Content-Type', 'application/zip');
@@ -96,43 +95,35 @@ export const createZipStream = async (
       }
     });
 
-    // Add files to archive
-    const addFilesSequentially = async () => {
-      for (const file of files) {
-        try {
-          logger.debug('Fetching file for zip', {
-            filename: file.filename,
-            size: file.size
-          });
-
-          // Fetch file from Plex server
-          const response = await axios({
-            method: 'GET',
-            url: file.url,
-            responseType: 'stream',
-            httpsAgent: httpsAgent
-          });
-
-          // Add file stream to archive
-          archive.append(response.data, { name: file.filename });
-
-          logger.debug('File added to zip', { filename: file.filename });
-        } catch (error) {
-          logger.error('Failed to add file to zip', {
-            filename: file.filename,
-            error
-          });
-          // Continue with other files even if one fails
-          // You could also reject here if you want strict behavior
-        }
+    // Open one Plex stream at a time: the next file is requested only when the archive has
+    // finished the previous one. Opening them all up front left dozens of idle connections
+    // to Plex competing for the disk and timing out on long ZIPs.
+    let index = 0;
+    const appendNext = async (): Promise<void> => {
+      if (index >= files.length) {
+        await archive.finalize();
+        return;
       }
-
-      // Finalize the archive (no more files will be added)
-      await archive.finalize();
+      const file = files[index++];
+      try {
+        const response = await axios({ method: 'GET', url: file.url, responseType: 'stream', httpsAgent });
+        archive.append(response.data, { name: file.filename });
+      } catch (error) {
+        // Skip a file Plex can't serve rather than failing the whole ZIP
+        logger.error('Failed to add file to zip', { filename: file.filename, error });
+        return appendNext();
+      }
     };
 
-    // Start adding files
-    addFilesSequentially().catch((err) => {
+    archive.on('entry', () => {
+      appendNext().catch((err) => {
+        logger.error('Error adding files to zip', { error: err });
+        archive.destroy();
+        reject(err);
+      });
+    });
+
+    appendNext().catch((err) => {
       logger.error('Error adding files to zip', { error: err });
       archive.destroy();
       reject(err);
@@ -140,11 +131,3 @@ export const createZipStream = async (
   });
 };
 
-/**
- * Calculate total size of files
- * @param files Array of file entries
- * @returns Total size in bytes
- */
-export const calculateTotalSize = (files: ZipFileEntry[]): number => {
-  return files.reduce((sum, file) => sum + (file.size || 0), 0);
-};
