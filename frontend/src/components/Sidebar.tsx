@@ -36,7 +36,7 @@ export const Sidebar: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ is
       >
         <NavLink to="/" onClick={onClose} className="flex items-center gap-2.5 px-5 pb-5">
           <img src="/icon-192.png" alt="" className="w-8 h-8 rounded-lg" />
-          <span className="font-semibold tracking-tight">LibraryDownloadarr</span>
+          <span className="font-semibold tracking-tight">Sanctuary Vacation</span>
         </NavLink>
 
         <nav className="flex-1 overflow-y-auto px-3 space-y-1" onClick={onClose}>

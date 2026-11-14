@@ -112,7 +112,7 @@ export const Login: React.FC = () => {
       <div className="max-w-md w-full">
         <div className="text-center mb-6 md:mb-8">
           <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-primary-500 to-secondary-500 bg-clip-text text-transparent mb-2">
-            LibraryDownloadarr
+            Sanctuary Vacation
           </h1>
           <p className="text-sm md:text-base text-gray-400">Ta médiathèque, prête à télécharger</p>
         </div>

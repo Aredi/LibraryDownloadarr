@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { DatabaseService } from '../models/database';
 import { plexService } from '../services/plexService';
 import { logger } from '../utils/logger';
+import { config } from '../config';
 import { AuthRequest, createAuthMiddleware } from '../middleware/auth';
 
 export const createAuthRouter = (db: DatabaseService) => {
@@ -109,7 +110,7 @@ export const createAuthRouter = (db: DatabaseService) => {
         url: `https://app.plex.tv/auth#?clientID=${encodeURIComponent(
           'librarydownloadarr'
         )}&code=${encodeURIComponent(pin.code)}&context[device][product]=${encodeURIComponent(
-          'LibraryDownloadarr'
+          config.plex.product
         )}`,
       });
     } catch (error) {

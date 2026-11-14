@@ -6,7 +6,7 @@ export const config = {
   },
   plex: {
     clientIdentifier: 'librarydownloadarr',
-    product: 'LibraryDownloadarr',
+    product: 'Sanctuary Vacation',
     version: '1.0.0',
     device: 'Server',
   },
