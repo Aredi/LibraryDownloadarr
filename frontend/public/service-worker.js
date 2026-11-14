@@ -1,4 +1,4 @@
-const CACHE_NAME = 'librarydownloadarr-v2';
+const CACHE_NAME = 'librarydownloadarr-v3';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -30,15 +30,10 @@ self.addEventListener('activate', (event) => {
 
 // Fetch with network-first strategy
 self.addEventListener('fetch', (event) => {
-  // Skip caching for download endpoints (they're too large and shouldn't be cached)
+  // API calls (data, thumbnails, downloads) go straight to the network, untouched:
+  // downloads stay native browser downloads and the cache doesn't fill up with images.
   const url = new URL(event.request.url);
-  const isDownloadRequest = url.pathname.includes('/download') ||
-                           url.pathname.includes('/season/') ||
-                           url.pathname.includes('/album/');
-
-  // For download requests, just fetch without caching
-  if (isDownloadRequest) {
-    event.respondWith(fetch(event.request));
+  if (url.pathname.startsWith('/api/') || event.request.method !== 'GET') {
     return;
   }
 

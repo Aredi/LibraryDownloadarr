@@ -673,7 +673,8 @@ export class PlexService {
             mediaTypes: metadata.map((m: any) => m.type).filter((v: any, i: any, a: any) => a.indexOf(v) === i)
           });
 
-          allMedia.push(...metadata);
+          // Tag items with their library so the UI can group them per library
+          allMedia.push(...metadata.map((m: any) => ({ ...m, librarySectionID: library.key, librarySectionTitle: library.title })));
         } catch (error: any) {
           logger.warn(`Failed to get recently added from library ${library.title}`, {
             libraryKey: library.key,
@@ -719,7 +720,8 @@ export class PlexService {
       return '';
     }
 
-    return `${baseUrl}${thumbPath}?X-Plex-Token=${token}`;
+    const sep = thumbPath.includes('?') ? '&' : '?';
+    return `${baseUrl}${thumbPath}${sep}X-Plex-Token=${token}`;
   }
 }
 

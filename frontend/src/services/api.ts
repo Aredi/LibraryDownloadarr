@@ -76,6 +76,7 @@ class ApiClient {
   }
 
   async logout(): Promise<void> {
+    this.librariesPromise = null;
     await this.client.post('/auth/logout');
     localStorage.removeItem('token');
   }
@@ -88,9 +89,20 @@ class ApiClient {
   }
 
   // Library endpoints
-  async getLibraries(): Promise<Library[]> {
-    const response = await this.client.get<{ libraries: Library[] }>('/libraries');
-    return response.data.libraries;
+  // Libraries rarely change: share one request between the sidebar and pages.
+  private librariesPromise: Promise<Library[]> | null = null;
+
+  getLibraries(): Promise<Library[]> {
+    if (!this.librariesPromise) {
+      this.librariesPromise = this.client
+        .get<{ libraries: Library[] }>('/libraries')
+        .then((r) => r.data.libraries)
+        .catch((err) => {
+          this.librariesPromise = null;
+          throw err;
+        });
+    }
+    return this.librariesPromise;
   }
 
   async getLibraryContent(libraryKey: string, viewType?: string): Promise<MediaItem[]> {
@@ -157,8 +169,15 @@ class ApiClient {
     return response.data.stats;
   }
 
+  // Download URLs carry the session token so the browser can save files natively
+  // (streamed straight to disk, with its own progress bar) instead of buffering in memory.
+  private withToken(url: string): string {
+    const token = localStorage.getItem('token') || '';
+    return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  }
+
   getDownloadUrl(ratingKey: string, partKey: string): string {
-    return `/api/media/${ratingKey}/download?partKey=${encodeURIComponent(partKey)}`;
+    return this.withToken(`/api/media/${ratingKey}/download?partKey=${encodeURIComponent(partKey)}`);
   }
 
   async getSeasonSize(seasonRatingKey: string): Promise<{ totalSize: number; fileCount: number; totalSizeGB: string }> {
@@ -176,16 +195,20 @@ class ApiClient {
   }
 
   getSeasonDownloadUrl(seasonRatingKey: string): string {
-    return `/api/media/season/${seasonRatingKey}/download`;
+    return this.withToken(`/api/media/season/${seasonRatingKey}/download`);
   }
 
   getAlbumDownloadUrl(albumRatingKey: string): string {
-    return `/api/media/album/${albumRatingKey}/download`;
+    return this.withToken(`/api/media/album/${albumRatingKey}/download`);
   }
 
-  getThumbnailUrl(ratingKey: string, path: string): string {
+  /** width: ask Plex for a resized image (much lighter than the original poster). */
+  getThumbnailUrl(ratingKey: string, path: string, width?: number): string {
     const token = localStorage.getItem('token');
-    return `/api/media/thumb/${ratingKey}?path=${encodeURIComponent(path)}&token=${token}`;
+    const source = width
+      ? `/photo/:/transcode?width=${width}&height=${Math.round(width * 1.5)}&minSize=1&upscale=1&url=${encodeURIComponent(path)}`
+      : path;
+    return `/api/media/thumb/${ratingKey}?path=${encodeURIComponent(source)}&token=${token}`;
   }
 
   // Settings endpoints

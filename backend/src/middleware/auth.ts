@@ -16,11 +16,14 @@ export interface AuthRequest extends Request {
   };
 }
 
-export const createAuthMiddleware = (db: DatabaseService) => {
+// allowQueryToken: also accept ?token=... so the browser can download files natively
+// (plain <a href> links can't send an Authorization header).
+export const createAuthMiddleware = (db: DatabaseService, options: { allowQueryToken?: boolean } = {}) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const authHeader = req.headers.authorization;
-      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      const queryToken = options.allowQueryToken && typeof req.query.token === 'string' ? req.query.token : null;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : queryToken;
 
       if (!token) {
         return res.status(401).json({ error: 'No token provided' });

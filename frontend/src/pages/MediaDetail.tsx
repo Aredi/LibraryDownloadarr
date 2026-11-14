@@ -1,586 +1,350 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Layout } from '../components/Layout';
+import { Poster } from '../components/MediaCard';
+import { ItemList } from '../components/ItemList';
+import { IconAlert, IconArchive, IconChevronLeft, IconDownload } from '../components/Icons';
 import { api } from '../services/api';
 import { MediaItem } from '../types';
-import { useDownloads } from '../contexts/DownloadContext';
-import { useMobileMenu } from '../hooks/useMobileMenu';
+import { useDownloads, DownloadRequest } from '../contexts/DownloadContext';
+import { useAuthStore } from '../stores/authStore';
+import { formatBytes, formatDate, formatDuration, isDownloadBlocked, itemSize, pad2, qualityLabel } from '../utils/format';
+
+// ---------- Hero ----------
+
+const Hero: React.FC<{ media: MediaItem; children?: React.ReactNode }> = ({ media, children }) => {
+  const [showFull, setShowFull] = useState(false);
+  const backdrop = media.art ? api.getThumbnailUrl(media.ratingKey, media.art) : null;
+  const square = media.type === 'album';
+  const facts = [
+    media.type === 'album' ? media.parentTitle : null,
+    media.year,
+    media.contentRating,
+    media.type === 'movie' ? formatDuration(media.duration) : null,
+    media.type === 'show' && media.childCount ? `${media.childCount} saison${media.childCount > 1 ? 's' : ''}` : null,
+    media.type === 'show' && media.leafCount ? `${media.leafCount} épisodes` : null,
+    media.rating ? `★ ${media.rating.toFixed(1)}` : null,
+    media.studio,
+  ].filter(Boolean);
+
+  return (
+    <div className="relative">
+      {backdrop && (
+        <div className="absolute inset-x-0 top-0 h-[22rem] md:h-[28rem] overflow-hidden -z-0">
+          <img src={backdrop} alt="" className="w-full h-full object-cover opacity-40" />
+          <div className="absolute inset-0 bg-gradient-to-t from-dark via-dark/70 to-dark/30" />
+          <div className="absolute inset-0 bg-gradient-to-r from-dark/80 to-transparent" />
+        </div>
+      )}
+      <div className="relative px-4 md:px-8 pt-6 md:pt-12 pb-6">
+        <div className="flex flex-col sm:flex-row gap-5 md:gap-8 sm:items-end">
+          <div className={`${square ? 'w-40 md:w-56' : 'w-32 md:w-52'} shrink-0 rounded-xl overflow-hidden shadow-2xl ring-1 ring-white/10`}>
+            <Poster media={media} width={400} square={square} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl md:text-4xl font-bold leading-tight">{media.title}</h1>
+            {facts.length > 0 && <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-300">{facts.map((f, i) => <span key={i}>{f}</span>)}</div>}
+            {media.Genre && media.Genre.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {media.Genre.map((g) => (
+                  <span key={g.tag} className="rounded-full border border-white/15 px-2.5 py-0.5 text-xs text-gray-300">
+                    {g.tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            {children && <div className="mt-5 flex flex-wrap gap-2">{children}</div>}
+          </div>
+        </div>
+        {media.summary && (
+          <p
+            onClick={() => setShowFull((v) => !v)}
+            className={`mt-5 max-w-3xl text-sm md:text-[15px] text-gray-300 leading-relaxed cursor-pointer ${showFull ? '' : 'line-clamp-3'}`}
+            title={showFull ? '' : 'Afficher tout'}
+          >
+            {media.summary}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const BlockedNotice = () => (
+  <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+    <IconAlert className="w-5 h-5 shrink-0" /> Le téléchargement est désactivé pour ton compte sur ce serveur.
+  </div>
+);
+
+// ---------- Movie ----------
+
+const MovieVersions: React.FC<{ media: MediaItem; canDownload: boolean; onDownload: (r: DownloadRequest[]) => boolean }> = ({
+  media,
+  canDownload,
+  onDownload,
+}) => {
+  const versions = media.Media || [];
+  if (versions.length <= 1) return null; // single version: the hero button is enough
+  return (
+    <section>
+      <h2 className="text-lg font-semibold mb-3">Versions disponibles</h2>
+      <ul className="rounded-xl border border-white/10 divide-y divide-white/5 overflow-hidden">
+        {versions.flatMap((v) =>
+          v.Part.map((part) => (
+            <li key={part.id} className="flex items-center gap-4 px-4 py-3 hover:bg-white/[0.03]">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{qualityLabel(v) || 'Version'}</div>
+                <div className="text-xs text-gray-500 truncate">
+                  {v.width}×{v.height} · {v.container?.toUpperCase()} · {part.file.split('/').pop()}
+                </div>
+              </div>
+              <span className="text-sm text-gray-400 tabular-nums">{formatBytes(part.size)}</span>
+              {canDownload && (
+                <button
+                  onClick={() => onDownload([{ url: api.getDownloadUrl(media.ratingKey, part.key), label: media.title, size: part.size }])}
+                  className="btn-primary flex items-center gap-2 text-sm py-1.5"
+                >
+                  <IconDownload className="w-4 h-4" /> Télécharger
+                </button>
+              )}
+            </li>
+          ))
+        )}
+      </ul>
+    </section>
+  );
+};
+
+// ---------- Show ----------
+
+const seasonLabel = (s: MediaItem) => (s.index === 0 ? s.title || 'Spéciaux' : `Saison ${s.index ?? ''}`.trim());
+
+const SeasonBrowser: React.FC<{
+  show: MediaItem;
+  seasons: MediaItem[];
+  canDownload: boolean;
+  onDownload: (r: DownloadRequest[]) => boolean;
+}> = ({ show, seasons, canDownload, onDownload }) => {
+  const [params, setParams] = useSearchParams();
+  const [episodes, setEpisodes] = useState<Record<string, MediaItem[]>>({});
+  const [loadError, setLoadError] = useState('');
+
+  const defaultSeason = seasons.find((s) => (s.index ?? 0) >= 1) || seasons[0];
+  const current = seasons.find((s) => s.ratingKey === params.get('saison')) || defaultSeason;
+  const highlight = params.get('ep');
+
+  useEffect(() => {
+    if (!current || episodes[current.ratingKey]) return;
+    setLoadError('');
+    api
+      .getEpisodes(current.ratingKey)
+      .then((eps) => setEpisodes((prev) => ({ ...prev, [current.ratingKey]: eps })))
+      .catch(() => setLoadError('Impossible de charger les épisodes.'));
+  }, [current?.ratingKey]);
+
+  if (!current) return <div className="text-gray-500">Aucune saison disponible.</div>;
+
+  const list = episodes[current.ratingKey];
+  const seasonSize = list?.reduce((s, e) => s + itemSize(e), 0) || 0;
+
+  const downloadSeason = () =>
+    onDownload([
+      {
+        url: api.getSeasonDownloadUrl(current.ratingKey),
+        label: `${show.title} – ${seasonLabel(current)} (ZIP)`,
+        size: seasonSize,
+      },
+    ]);
+
+  return (
+    <section>
+      {/* Season tabs */}
+      <div className="flex gap-2 overflow-x-auto pb-3 -mx-4 px-4 md:mx-0 md:px-0" role="tablist">
+        {seasons.map((s) => {
+          const active = s.ratingKey === current.ratingKey;
+          return (
+            <button
+              key={s.ratingKey}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setParams({ saison: s.ratingKey }, { replace: true })}
+              className={`shrink-0 rounded-full px-4 py-1.5 text-sm transition ${
+                active ? 'bg-white text-black font-semibold' : 'bg-white/5 text-gray-300 hover:bg-white/10'
+              }`}
+            >
+              {seasonLabel(s)}
+              {s.leafCount ? <span className={active ? 'text-black/50' : 'text-gray-500'}> · {s.leafCount}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {loadError && <div className="text-sm text-red-300 py-4">{loadError}</div>}
+
+      {!list ? (
+        <div className="rounded-xl border border-white/10 divide-y divide-white/5">
+          {Array.from({ length: Math.min(current.leafCount || 6, 10) }).map((_, i) => (
+            <div key={i} className="h-16 animate-pulse bg-white/[0.02]" />
+          ))}
+        </div>
+      ) : (
+        <ItemList
+          items={list}
+          kind="episode"
+          canDownload={canDownload}
+          onDownload={onDownload}
+          highlightKey={highlight}
+          actions={
+            canDownload && list.length > 0 ? (
+              <button onClick={downloadSeason} className="btn-secondary flex items-center gap-2 text-sm py-1.5" title="Toute la saison dans un seul fichier ZIP">
+                <IconArchive className="w-4 h-4" /> Saison {pad2(current.index)} en ZIP · {formatBytes(seasonSize)}
+              </button>
+            ) : null
+          }
+        />
+      )}
+    </section>
+  );
+};
+
+// ---------- Page ----------
 
 export const MediaDetail: React.FC = () => {
   const { ratingKey } = useParams<{ ratingKey: string }>();
-  const { startDownload, downloads } = useDownloads();
-  const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useMobileMenu();
+  const navigate = useNavigate();
+  const { download } = useDownloads();
+  const { user } = useAuthStore();
   const [media, setMedia] = useState<MediaItem | null>(null);
-  const [seasons, setSeasons] = useState<MediaItem[]>([]);
-  const [episodesBySeason, setEpisodesBySeason] = useState<Record<string, MediaItem[]>>({});
-  const [expandedSeasons, setExpandedSeasons] = useState<Record<string, boolean>>({});
-  const [tracks, setTracks] = useState<MediaItem[]>([]);
+  const [children, setChildren] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (ratingKey) {
-      loadMediaDetails();
-    }
-  }, [ratingKey]);
-
-  const loadMediaDetails = async () => {
     if (!ratingKey) return;
-
+    let cancelled = false;
     setIsLoading(true);
     setError('');
-
-    try {
-      const metadata = await api.getMediaMetadata(ratingKey);
-      setMedia(metadata);
-
-      // If it's a TV show, load seasons
-      if (metadata.type === 'show') {
-        const seasonsData = await api.getSeasons(ratingKey);
-        setSeasons(seasonsData);
-      }
-
-      // If it's a season (clicked directly from recently added), load episodes
-      if (metadata.type === 'season') {
-        const episodesData = await api.getEpisodes(ratingKey);
-        setEpisodesBySeason({ [ratingKey]: episodesData });
-        setExpandedSeasons({ [ratingKey]: true }); // Auto-expand the season
-      }
-
-      // If it's an album (audiobook), load tracks
-      if (metadata.type === 'album') {
-        const tracksData = await api.getTracks(ratingKey);
-        setTracks(tracksData);
-      }
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load media details');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const toggleSeason = async (seasonRatingKey: string) => {
-    setExpandedSeasons((prev) => ({
-      ...prev,
-      [seasonRatingKey]: !prev[seasonRatingKey],
-    }));
-
-    // Load episodes if not already loaded
-    if (!episodesBySeason[seasonRatingKey]) {
+    (async () => {
       try {
-        const episodes = await api.getEpisodes(seasonRatingKey);
-        setEpisodesBySeason((prev) => ({
-          ...prev,
-          [seasonRatingKey]: episodes,
-        }));
-      } catch (err) {
-        console.error('Failed to load episodes:', err);
-      }
-    }
-  };
-
-  // Helper function to check if a download is in progress for a given part
-  const isDownloading = (partKey: string): boolean => {
-    return downloads.some(d => d.partKey === partKey && d.status === 'downloading');
-  };
-
-  // Helper function to get download progress for a given part
-  const getDownloadProgress = (partKey: string): number => {
-    const download = downloads.find(d => d.partKey === partKey);
-    return download?.progress || 0;
-  };
-
-  const handleDownload = async (itemRatingKey: string, partKey: string, filename: string, itemTitle: string, fileSize?: number) => {
-    // Check file size and warn if over 10GB
-    const tenGB = 10737418240;
-    if (fileSize && fileSize > tenGB) {
-      const sizeGB = (fileSize / 1073741824).toFixed(2);
-      const confirmed = window.confirm(
-        `This file is ${sizeGB} GB. Large downloads may take a long time and use significant bandwidth.\n\nDo you want to continue?`
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-
-    // Use the global download context with the specific item's rating key
-    await startDownload(itemRatingKey, partKey, filename, itemTitle);
-  };
-
-  const handleSeasonDownload = async (seasonRatingKey: string, seasonTitle: string) => {
-    try {
-      // Get size info first
-      const sizeInfo = await api.getSeasonSize(seasonRatingKey);
-
-      // Check if over 10GB and confirm
-      const tenGB = 10737418240;
-      if (sizeInfo.totalSize > tenGB) {
-        const confirmed = window.confirm(
-          `This season contains ${sizeInfo.fileCount} episodes totaling ${sizeInfo.totalSizeGB} GB.\n\nLarge downloads may take a long time and use significant bandwidth.\n\nDo you want to continue?`
-        );
-        if (!confirmed) {
-          return;
+        const meta = await api.getMediaMetadata(ratingKey);
+        // Seasons, episodes and tracks are shown inside their parent page
+        if (meta.type === 'season' && meta.parentRatingKey) {
+          return navigate(`/media/${meta.parentRatingKey}?saison=${meta.ratingKey}`, { replace: true });
+        }
+        if (meta.type === 'episode' && meta.grandparentRatingKey) {
+          return navigate(`/media/${meta.grandparentRatingKey}?saison=${meta.parentRatingKey}&ep=${meta.ratingKey}`, { replace: true });
+        }
+        if (meta.type === 'track' && meta.parentRatingKey) {
+          return navigate(`/media/${meta.parentRatingKey}`, { replace: true });
+        }
+        const kids = meta.type === 'show' ? await api.getSeasons(ratingKey) : meta.type === 'album' ? await api.getTracks(ratingKey) : [];
+        if (!cancelled) {
+          setMedia(meta);
+          setChildren(kids);
+          setIsLoading(false);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err.response?.data?.error || 'Impossible de charger ce média');
+          setIsLoading(false);
         }
       }
-
-      const downloadUrl = api.getSeasonDownloadUrl(seasonRatingKey);
-      const showName = media?.title || 'Unknown Show';
-      const seasonNumber = seasons.find(s => s.ratingKey === seasonRatingKey)?.index || 0;
-      const zipFilename = `${showName} - S${String(seasonNumber).padStart(2, '0')}.zip`;
-
-      // Use the download context to track the season download
-      await startDownload(seasonRatingKey, downloadUrl, zipFilename, `${seasonTitle} (Full Season)`);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to start season download');
-    }
-  };
-
-  const handleAlbumDownload = async (albumRatingKey: string, albumTitle: string) => {
-    try {
-      // Get size info first
-      const sizeInfo = await api.getAlbumSize(albumRatingKey);
-
-      // Check if over 10GB and confirm
-      const tenGB = 10737418240;
-      if (sizeInfo.totalSize > tenGB) {
-        const confirmed = window.confirm(
-          `This album contains ${sizeInfo.fileCount} tracks totaling ${sizeInfo.totalSizeGB} GB.\n\nLarge downloads may take a long time and use significant bandwidth.\n\nDo you want to continue?`
-        );
-        if (!confirmed) {
-          return;
-        }
-      }
-
-      const downloadUrl = api.getAlbumDownloadUrl(albumRatingKey);
-      const zipFilename = `${albumTitle}.zip`;
-
-      // Use the download context to track the album download
-      await startDownload(albumRatingKey, downloadUrl, zipFilename, `${albumTitle} (Full Album)`);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to start album download');
-    }
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-  };
-
-  const formatDuration = (ms: number): string => {
-    const minutes = Math.floor(ms / 60000);
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
-  };
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ratingKey]);
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex flex-col">
-        <Header onMenuClick={toggleMobileMenu} />
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-          <main className="flex-1 p-4 md:p-8 overflow-y-auto flex items-center justify-center">
-            <div className="text-gray-400">Loading...</div>
-          </main>
+      <Layout padded={false}>
+        <div className="px-4 md:px-8 pt-12 flex gap-8 items-end">
+          <div className="w-32 md:w-52 aspect-[2/3] rounded-xl bg-white/5 animate-pulse" />
+          <div className="flex-1 space-y-3">
+            <div className="h-8 w-2/3 rounded bg-white/5 animate-pulse" />
+            <div className="h-4 w-1/3 rounded bg-white/5 animate-pulse" />
+          </div>
         </div>
-      </div>
+      </Layout>
     );
   }
 
   if (error || !media) {
     return (
-      <div className="min-h-screen flex flex-col">
-        <Header onMenuClick={toggleMobileMenu} />
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-          <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-            <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg">
-              {error || 'Media not found'}
-            </div>
-          </main>
-        </div>
-      </div>
+      <Layout>
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error || 'Média introuvable'}</div>
+      </Layout>
     );
   }
 
-  const posterUrl = media.thumb ? api.getThumbnailUrl(media.ratingKey, media.thumb) : null;
-  const backdropUrl = media.art ? api.getThumbnailUrl(media.ratingKey, media.art) : null;
+  const canDownload = !!user?.isAdmin || !isDownloadBlocked(media);
+  const mainPart = media.Media?.[0]?.Part?.[0];
+  const backTo = media.librarySectionID ? `/library/${media.librarySectionID}` : null;
+
+  const downloadAllSeasons = () => {
+    const eps = children.reduce((s, c) => s + (c.leafCount || 0), 0);
+    if (!window.confirm(`Télécharger les ${children.length} saisons (${eps} épisodes) ? Chaque saison arrive dans son propre fichier ZIP.`)) return;
+    download(children.map((s) => ({ url: api.getSeasonDownloadUrl(s.ratingKey), label: `${media.title} – ${seasonLabel(s)}` })));
+  };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header onMenuClick={toggleMobileMenu} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-        <main className="flex-1 overflow-y-auto">
-          {/* Backdrop */}
-          {backdropUrl && (
-            <div
-              className="h-48 md:h-96 bg-cover bg-center relative"
-              style={{ backgroundImage: `url(${backdropUrl})` }}
-            >
-              <div className="absolute inset-0 bg-gradient-to-t from-dark via-dark/60 to-transparent" />
-            </div>
-          )}
+    <Layout padded={false}>
+      {backTo && (
+        <Link to={backTo} className="relative z-10 inline-flex items-center gap-1 mt-4 ml-3 md:ml-6 px-2 py-1 rounded text-sm text-gray-300 hover:text-white">
+          <IconChevronLeft className="w-4 h-4" /> {media.librarySectionTitle || 'Bibliothèque'}
+        </Link>
+      )}
 
-          <div className={`p-4 md:p-8 relative z-10 ${backdropUrl ? '-mt-24 md:-mt-48' : ''}`}>
-            <div className="max-w-7xl mx-auto">
-              <div className="flex flex-col md:flex-row gap-4 md:gap-8">
-                {/* Poster */}
-                <div className="flex-shrink-0">
-                  {posterUrl ? (
-                    <img
-                      src={posterUrl}
-                      alt={media.title}
-                      className="w-full max-w-[200px] md:w-64 rounded-lg shadow-2xl"
-                    />
-                  ) : (
-                    <div className="w-full max-w-[200px] md:w-64 h-72 md:h-96 bg-dark-200 rounded-lg flex items-center justify-center">
-                      <span className="text-4xl md:text-6xl">
-                        {media.type === 'movie' ? '🎬' : '📺'}
-                      </span>
-                    </div>
-                  )}
-                </div>
+      <Hero media={media}>
+        {canDownload && media.type === 'movie' && mainPart && (
+          <button
+            onClick={() => download([{ url: api.getDownloadUrl(media.ratingKey, mainPart.key), label: media.title, size: mainPart.size }])}
+            className="btn-primary flex items-center gap-2 px-5 py-2.5"
+          >
+            <IconDownload /> Télécharger
+            <span className="opacity-70 font-normal">
+              · {[qualityLabel(media.Media?.[0]).split(' · ')[0], formatBytes(mainPart.size)].filter(Boolean).join(' · ')}
+            </span>
+          </button>
+        )}
+        {canDownload && media.type === 'show' && children.length > 1 && (
+          <button onClick={downloadAllSeasons} className="btn-secondary flex items-center gap-2">
+            <IconArchive className="w-4 h-4" /> Toutes les saisons
+          </button>
+        )}
+        {canDownload && media.type === 'album' && children.length > 0 && (
+          <button
+            onClick={() =>
+              download([{ url: api.getAlbumDownloadUrl(media.ratingKey), label: `${media.title} (ZIP)`, size: children.reduce((s, t) => s + itemSize(t), 0) }])
+            }
+            className="btn-primary flex items-center gap-2 px-5 py-2.5"
+          >
+            <IconArchive /> Tout l’album en ZIP · {formatBytes(children.reduce((s, t) => s + itemSize(t), 0))}
+          </button>
+        )}
+      </Hero>
 
-                {/* Details */}
-                <div className="flex-1">
-                  <h1 className="text-2xl md:text-4xl font-bold mb-2">{media.title}</h1>
+      <div className="px-4 md:px-8 pb-12 space-y-8 max-w-6xl">
+        {!canDownload && <BlockedNotice />}
 
-                  <div className="flex flex-wrap gap-2 md:gap-4 text-xs md:text-sm text-gray-400 mb-4">
-                    {media.year && <span>{media.year}</span>}
-                    {media.contentRating && <span>{media.contentRating}</span>}
-                    {media.duration && <span>{formatDuration(media.duration)}</span>}
-                    {media.rating && <span>⭐ {media.rating.toFixed(1)}</span>}
-                  </div>
+        {media.type === 'movie' && <MovieVersions media={media} canDownload={canDownload} onDownload={download} />}
+        {media.type === 'movie' && media.originallyAvailableAt && (
+          <p className="text-xs text-gray-500">Sortie : {formatDate(media.originallyAvailableAt)}</p>
+        )}
 
-                  {media.summary && (
-                    <p className="text-sm md:text-base text-gray-300 mb-4 md:mb-6 leading-relaxed">{media.summary}</p>
-                  )}
+        {media.type === 'show' && <SeasonBrowser show={media} seasons={children} canDownload={canDownload} onDownload={download} />}
 
-                  {media.studio && (
-                    <div className="mb-4">
-                      <span className="text-xs md:text-sm text-gray-500">Studio: </span>
-                      <span className="text-xs md:text-sm text-gray-300">{media.studio}</span>
-                    </div>
-                  )}
+        {media.type === 'album' && <ItemList items={children} kind="track" canDownload={canDownload} onDownload={download} />}
 
-                  {/* Download Options */}
-                  <div className="mt-4 md:mt-8">
-                    <div className="flex items-center justify-between mb-4">
-                      <h2 className="text-xl md:text-2xl font-semibold">Download</h2>
-                      {media.type === 'album' && tracks.length > 0 && (
-                        <button
-                          onClick={() => handleAlbumDownload(ratingKey!, media.title)}
-                          disabled={isDownloading(api.getAlbumDownloadUrl(ratingKey!))}
-                          className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Download entire album as ZIP"
-                        >
-                          {isDownloading(api.getAlbumDownloadUrl(ratingKey!))
-                            ? '⏳ Zipping...'
-                            : '📦 Download Album'}
-                        </button>
-                      )}
-                    </div>
-
-                    {media.type === 'album' ? (
-                      // Album (Audiobook) - Show tracks
-                      tracks.length > 0 ? (
-                        <div className="space-y-2">
-                          {tracks.map((track, index) => (
-                            <div
-                              key={track.ratingKey}
-                              className="card p-3 md:p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-0"
-                            >
-                              <div className="flex items-center space-x-3">
-                                <div className="text-gray-400 font-mono text-sm w-6 md:w-8">
-                                  {index + 1}.
-                                </div>
-                                <div>
-                                  <div className="font-medium text-sm md:text-base">{track.title}</div>
-                                  <div className="text-xs md:text-sm text-gray-400">
-                                    {track.duration && formatDuration(track.duration)}
-                                    {track.Media?.[0]?.Part?.[0]?.size && (
-                                      <> • {formatFileSize(track.Media[0].Part[0].size)}</>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                              {track.Media?.[0]?.Part?.[0] && (
-                                <div className="flex flex-col items-end gap-2">
-                                  <button
-                                    onClick={() =>
-                                      handleDownload(
-                                        track.ratingKey,
-                                        track.Media![0].Part[0].key,
-                                        track.Media![0].Part[0].file.split('/').pop() || 'download',
-                                        track.title,
-                                        track.Media![0].Part[0].size
-                                      )
-                                    }
-                                    disabled={isDownloading(track.Media![0].Part[0].key)}
-                                    className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                                  >
-                                    {isDownloading(track.Media![0].Part[0].key)
-                                      ? `${getDownloadProgress(track.Media![0].Part[0].key)}%`
-                                      : 'Download'}
-                                  </button>
-                                  {isDownloading(track.Media![0].Part[0].key) && (
-                                    <div className="w-32 h-2 bg-dark-200 rounded-full overflow-hidden">
-                                      <div
-                                        className="h-full bg-gradient-to-r from-primary-500 to-primary-400 transition-all duration-300 ease-out"
-                                        style={{ width: `${getDownloadProgress(track.Media![0].Part[0].key)}%` }}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-gray-400">No tracks available</div>
-                      )
-                    ) : media.type === 'season' && ratingKey ? (
-                      // Season (clicked directly) - Show episodes
-                      episodesBySeason[ratingKey] && episodesBySeason[ratingKey].length > 0 ? (
-                        <div className="space-y-2">
-                          {episodesBySeason[ratingKey].map((episode: MediaItem) => (
-                            <div
-                              key={episode.ratingKey}
-                              className="card p-3 md:p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-0"
-                            >
-                              <div className="flex items-center space-x-3">
-                                {episode.thumb && (
-                                  <img
-                                    src={api.getThumbnailUrl(episode.ratingKey, episode.thumb)}
-                                    alt={episode.title}
-                                    className="w-20 h-12 md:w-24 md:h-16 object-cover rounded"
-                                  />
-                                )}
-                                <div>
-                                  <div className="font-medium text-sm md:text-base">{episode.title}</div>
-                                  <div className="text-xs md:text-sm text-gray-400">
-                                    {episode.duration && formatDuration(episode.duration)}
-                                    {episode.Media?.[0]?.Part?.[0]?.size && (
-                                      <> • {formatFileSize(episode.Media[0].Part[0].size)}</>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                              {episode.Media?.[0]?.Part?.[0] && (
-                                <div className="flex flex-col items-end gap-2">
-                                  <button
-                                    onClick={() =>
-                                      handleDownload(
-                                        episode.ratingKey,
-                                        episode.Media![0].Part[0].key,
-                                        episode.Media![0].Part[0].file.split('/').pop() || 'download',
-                                        episode.title,
-                                        episode.Media![0].Part[0].size
-                                      )
-                                    }
-                                    disabled={isDownloading(episode.Media![0].Part[0].key)}
-                                    className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                                  >
-                                    {isDownloading(episode.Media![0].Part[0].key)
-                                      ? `${getDownloadProgress(episode.Media![0].Part[0].key)}%`
-                                      : 'Download'}
-                                  </button>
-                                  {isDownloading(episode.Media![0].Part[0].key) && (
-                                    <div className="w-32 h-2 bg-dark-200 rounded-full overflow-hidden">
-                                      <div
-                                        className="h-full bg-gradient-to-r from-primary-500 to-primary-400 transition-all duration-300 ease-out"
-                                        style={{ width: `${getDownloadProgress(episode.Media![0].Part[0].key)}%` }}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-gray-400">No episodes available</div>
-                      )
-                    ) : media.type === 'show' ? (
-                      // TV Show - Show seasons and episodes
-                      seasons.length > 0 ? (
-                        <div className="space-y-4">
-                          {seasons.map((season) => (
-                            <div key={season.ratingKey} className="card">
-                              <div className="p-3 md:p-4 flex items-center justify-between">
-                                <button
-                                  onClick={() => toggleSeason(season.ratingKey)}
-                                  className="flex-1 flex items-center space-x-3 md:space-x-4 hover:bg-dark-200 transition-colors rounded -m-3 md:-m-4 p-3 md:p-4"
-                                >
-                                  {season.thumb && (
-                                    <img
-                                      src={api.getThumbnailUrl(season.ratingKey, season.thumb)}
-                                      alt={season.title}
-                                      className="w-12 h-18 md:w-16 md:h-24 object-cover rounded"
-                                    />
-                                  )}
-                                  <div className="text-left flex-1">
-                                    <div className="font-medium text-base md:text-lg">{season.title}</div>
-                                    {season.summary && (
-                                      <div className="text-xs md:text-sm text-gray-400 line-clamp-2">
-                                        {season.summary}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <span className="text-gray-400">
-                                    {expandedSeasons[season.ratingKey] ? '▼' : '▶'}
-                                  </span>
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleSeasonDownload(season.ratingKey, season.title);
-                                  }}
-                                  disabled={isDownloading(api.getSeasonDownloadUrl(season.ratingKey))}
-                                  className="btn-primary ml-2 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap text-sm md:text-base px-3 md:px-4 py-2"
-                                  title="Download entire season as ZIP"
-                                >
-                                  {isDownloading(api.getSeasonDownloadUrl(season.ratingKey))
-                                    ? '⏳ Zipping...'
-                                    : '📦 Season'}
-                                </button>
-                              </div>
-
-                              {expandedSeasons[season.ratingKey] && (
-                                <div className="border-t border-dark-50 p-3 md:p-4 space-y-2">
-                                  {episodesBySeason[season.ratingKey] ? (
-                                    episodesBySeason[season.ratingKey].map((episode) => (
-                                      <div
-                                        key={episode.ratingKey}
-                                        className="card p-3 md:p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-0"
-                                      >
-                                        <div className="flex items-center space-x-3">
-                                          {episode.thumb && (
-                                            <img
-                                              src={api.getThumbnailUrl(episode.ratingKey, episode.thumb)}
-                                              alt={episode.title}
-                                              className="w-20 h-12 md:w-24 md:h-16 object-cover rounded"
-                                            />
-                                          )}
-                                          <div>
-                                            <div className="font-medium text-sm md:text-base">{episode.title}</div>
-                                            <div className="text-xs md:text-sm text-gray-400">
-                                              {episode.duration && formatDuration(episode.duration)}
-                                              {episode.Media?.[0]?.Part?.[0]?.size && (
-                                                <> • {formatFileSize(episode.Media[0].Part[0].size)}</>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-                                        {episode.Media?.[0]?.Part?.[0] && (
-                                          <div className="flex flex-col items-end gap-2">
-                                            <button
-                                              onClick={() =>
-                                                handleDownload(
-                                                  episode.ratingKey,
-                                                  episode.Media![0].Part[0].key,
-                                                  episode.Media![0].Part[0].file.split('/').pop() || 'download',
-                                                  episode.title,
-                                                  episode.Media![0].Part[0].size
-                                                )
-                                              }
-                                              disabled={isDownloading(episode.Media![0].Part[0].key)}
-                                              className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                                            >
-                                              {isDownloading(episode.Media![0].Part[0].key)
-                                                ? `${getDownloadProgress(episode.Media![0].Part[0].key)}%`
-                                                : 'Download'}
-                                            </button>
-                                            {isDownloading(episode.Media![0].Part[0].key) && (
-                                              <div className="w-32 h-2 bg-dark-200 rounded-full overflow-hidden">
-                                                <div
-                                                  className="h-full bg-gradient-to-r from-primary-500 to-primary-400 transition-all duration-300 ease-out"
-                                                  style={{ width: `${getDownloadProgress(episode.Media![0].Part[0].key)}%` }}
-                                                />
-                                              </div>
-                                            )}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))
-                                  ) : (
-                                    <div className="text-center text-gray-400 py-4">Loading episodes...</div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-gray-400">No seasons available</div>
-                      )
-                    ) : (
-                      // Movie or other media type - Show direct download
-                      media.Media && media.Media.length > 0 ? (
-                        <div className="space-y-4">
-                          {media.Media.map((mediaPart, idx) => (
-                            <div key={idx} className="card p-4 md:p-6">
-                              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-0">
-                                <div>
-                                  <div className="font-medium text-sm md:text-base mb-1">
-                                    {mediaPart.videoResolution} - {mediaPart.videoCodec.toUpperCase()}
-                                  </div>
-                                  <div className="text-xs md:text-sm text-gray-400">
-                                    {mediaPart.width}x{mediaPart.height} • {mediaPart.container.toUpperCase()}
-                                    {mediaPart.Part[0]?.size && (
-                                      <> • {formatFileSize(mediaPart.Part[0].size)}</>
-                                    )}
-                                  </div>
-                                </div>
-                                {mediaPart.Part.map((part, partIdx) => (
-                                  <div key={partIdx} className="flex flex-col items-end gap-2">
-                                    <button
-                                      onClick={() =>
-                                        handleDownload(
-                                          ratingKey!,
-                                          part.key,
-                                          part.file.split('/').pop() || 'download',
-                                          media.title,
-                                          part.size
-                                        )
-                                      }
-                                      disabled={isDownloading(part.key)}
-                                      className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                      {isDownloading(part.key)
-                                        ? `${getDownloadProgress(part.key)}%`
-                                        : 'Download'}
-                                    </button>
-                                    {isDownloading(part.key) && (
-                                      <div className="w-32 h-2 bg-dark-200 rounded-full overflow-hidden">
-                                        <div
-                                          className="h-full bg-gradient-to-r from-primary-500 to-primary-400 transition-all duration-300 ease-out"
-                                          style={{ width: `${getDownloadProgress(part.key)}%` }}
-                                        />
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-gray-400">No download options available</div>
-                      )
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </main>
+        {!['movie', 'show', 'album'].includes(media.type) && mainPart && canDownload && (
+          <button
+            onClick={() => download([{ url: api.getDownloadUrl(media.ratingKey, mainPart.key), label: media.title, size: mainPart.size }])}
+            className="btn-primary flex items-center gap-2"
+          >
+            <IconDownload /> Télécharger · {formatBytes(mainPart.size)}
+          </button>
+        )}
       </div>
-    </div>
+    </Layout>
   );
 };

@@ -7,6 +7,7 @@ import axios from 'axios';
 import https from 'https';
 import path from 'path';
 import { createZipStream, ZipFileEntry } from '../utils/zipUtils';
+import { contentDisposition } from '../utils/contentDisposition';
 
 // HTTPS agent that bypasses SSL certificate validation for local Plex servers
 // This is necessary when connecting to Plex servers with self-signed certificates
@@ -18,6 +19,7 @@ const httpsAgent = new https.Agent({
 export const createMediaRouter = (db: DatabaseService) => {
   const router = Router();
   const authMiddleware = createAuthMiddleware(db);
+  const downloadAuth = createAuthMiddleware(db, { allowQueryToken: true });
 
   // Helper function to format media title for download logs
   const formatMediaTitle = (metadata: any, libraryTitle?: string): string => {
@@ -360,7 +362,7 @@ export const createMediaRouter = (db: DatabaseService) => {
   });
 
   // Download media
-  router.get('/:ratingKey/download', authMiddleware, async (req: AuthRequest, res) => {
+  router.get('/:ratingKey/download', downloadAuth, async (req: AuthRequest, res) => {
     try {
       const { ratingKey } = req.params;
       const { partKey } = req.query;
@@ -481,8 +483,10 @@ export const createMediaRouter = (db: DatabaseService) => {
       );
 
       // Set headers for download
-      const filename = metadata.Media?.[0]?.Part?.[0]?.file.split('/').pop() || 'download';
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      const allParts = (metadata.Media || []).flatMap((m: any) => m.Part || []);
+      const part = allParts.find((p: any) => p.key === partKey) || allParts[0];
+      const filename = part?.file ? path.basename(part.file) : 'download';
+      res.setHeader('Content-Disposition', contentDisposition(filename));
       res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
       if (fileSize) {
         res.setHeader('Content-Length', fileSize.toString());
@@ -594,7 +598,7 @@ export const createMediaRouter = (db: DatabaseService) => {
   });
 
   // Download entire season as zip
-  router.get('/season/:seasonRatingKey/download', authMiddleware, async (req: AuthRequest, res) => {
+  router.get('/season/:seasonRatingKey/download', downloadAuth, async (req: AuthRequest, res) => {
     try {
       const { seasonRatingKey } = req.params;
 
@@ -676,7 +680,7 @@ export const createMediaRouter = (db: DatabaseService) => {
       }
 
       // Generate zip filename: "ShowName - SXX.zip"
-      const showName = seasonMetadata.grandparentTitle || 'Unknown Show';
+      const showName = seasonMetadata.parentTitle || seasonMetadata.grandparentTitle || 'Unknown Show';
       const seasonNumber = seasonMetadata.index || seasonMetadata.parentIndex || 0;
       const zipFilename = `${showName} - S${String(seasonNumber).padStart(2, '0')}.zip`;
 
@@ -706,7 +710,7 @@ export const createMediaRouter = (db: DatabaseService) => {
   });
 
   // Download entire album as zip
-  router.get('/album/:albumRatingKey/download', authMiddleware, async (req: AuthRequest, res) => {
+  router.get('/album/:albumRatingKey/download', downloadAuth, async (req: AuthRequest, res) => {
     try {
       const { albumRatingKey } = req.params;
 
@@ -877,9 +881,9 @@ export const createMediaRouter = (db: DatabaseService) => {
       });
 
       res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
-      if (response.headers['content-length']) {
-        res.setHeader('Content-Length', response.headers['content-length']);
-      }
+      // No Content-Length: axios may decompress the stream, so Plex's length can be wrong.
+      // Images are immutable per path, let the browser keep them for a day.
+      res.setHeader('Cache-Control', 'private, max-age=86400');
 
       response.data.pipe(res);
       return;

@@ -1,90 +1,88 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { MediaItem } from '../types';
 import { api } from '../services/api';
+import { episodeCode } from '../utils/format';
+import { IconFilm, IconMusic, IconTv } from './Icons';
 
-interface MediaCardProps {
-  media: MediaItem;
-  onClick: () => void;
-}
+/** Where a card should lead: episodes and seasons open their show, on the right season. */
+export const mediaLink = (m: MediaItem): string => {
+  if (m.type === 'episode' && m.grandparentRatingKey) {
+    return `/media/${m.grandparentRatingKey}?saison=${m.parentRatingKey}&ep=${m.ratingKey}`;
+  }
+  if (m.type === 'season' && m.parentRatingKey) return `/media/${m.parentRatingKey}?saison=${m.ratingKey}`;
+  return `/media/${m.ratingKey}`;
+};
 
-export const MediaCard: React.FC<MediaCardProps> = ({ media, onClick }) => {
-  const thumbnailUrl = media.thumb ? api.getThumbnailUrl(media.ratingKey, media.thumb) : null;
+const placeholderIcon = (type: string) =>
+  type === 'movie' ? <IconFilm className="w-10 h-10" /> : ['album', 'track', 'artist'].includes(type) ? <IconMusic className="w-10 h-10" /> : <IconTv className="w-10 h-10" />;
 
-  // Format display info based on media type
-  const getDisplayInfo = () => {
-    if (media.type === 'episode') {
-      // Show: Show Name
-      // Subtitle: S##E## - Episode Title (or just E## if no season number)
-      const showName = media.grandparentTitle || 'Unknown Show';
-      const seasonNum = media.parentIndex ? `S${String(media.parentIndex).padStart(2, '0')}` : '';
-      const episodeNum = media.index ? `E${String(media.index).padStart(2, '0')}` : '';
-      const episodeInfo = seasonNum ? `${seasonNum}${episodeNum}` : episodeNum;
-      const subtitle = episodeInfo ? `${episodeInfo} - ${media.title}` : media.title;
+export const Poster: React.FC<{ media: MediaItem; path?: string; width?: number; className?: string; square?: boolean }> = ({
+  media,
+  path,
+  width = 300,
+  className = '',
+  square,
+}) => {
+  const [failed, setFailed] = useState(false);
+  const src = path || media.thumb;
+  return (
+    <div className={`relative overflow-hidden bg-white/5 ${square ? 'aspect-square' : 'aspect-[2/3]'} ${className}`}>
+      {src && !failed ? (
+        <img
+          src={api.getThumbnailUrl(media.ratingKey, src, width)}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center text-gray-600">{placeholderIcon(media.type)}</div>
+      )}
+    </div>
+  );
+};
 
-      return {
-        title: showName,
-        subtitle,
-        meta: media.parentTitle || null, // Season name
-      };
+const cardText = (m: MediaItem): { title: string; subtitle: string } => {
+  switch (m.type) {
+    case 'episode':
+      return { title: m.grandparentTitle || m.title, subtitle: `${episodeCode(m)} · ${m.title}` };
+    case 'season':
+      return { title: m.parentTitle || m.title, subtitle: m.title + (m.leafCount ? ` · ${m.leafCount} ép.` : '') };
+    case 'show': {
+      const bits = [m.year, m.childCount ? `${m.childCount} saison${m.childCount > 1 ? 's' : ''}` : null];
+      return { title: m.title, subtitle: bits.filter(Boolean).join(' · ') };
     }
+    case 'album':
+      return { title: m.title, subtitle: [m.parentTitle, m.year].filter(Boolean).join(' · ') };
+    case 'track':
+      return { title: m.title, subtitle: [m.grandparentTitle, m.parentTitle].filter(Boolean).join(' · ') };
+    default:
+      return { title: m.title, subtitle: m.year ? String(m.year) : '' };
+  }
+};
 
-    if (media.type === 'track') {
-      // Show: Album Name
-      // Subtitle: Track Title
-      const albumName = media.parentTitle || 'Unknown Album';
-      return {
-        title: albumName,
-        subtitle: media.title,
-        meta: media.grandparentTitle || null, // Artist name
-      };
-    }
-
-    // For movies, shows, seasons, albums - show normally
-    return {
-      title: media.title,
-      subtitle: null,
-      meta: media.year?.toString() || null,
-    };
-  };
-
-  const { title, subtitle, meta } = getDisplayInfo();
+export const MediaCard: React.FC<{ media: MediaItem }> = ({ media }) => {
+  const { title, subtitle } = cardText(media);
+  const square = ['album', 'track', 'artist'].includes(media.type);
+  // Episodes use the show poster so the grid stays uniform
+  const path = media.type === 'episode' ? media.grandparentThumb || media.parentThumb || media.thumb : undefined;
 
   return (
-    <div
-      onClick={onClick}
-      className="card cursor-pointer transition-all duration-300 hover:scale-105 hover:shadow-2xl group"
-    >
-      <div className="relative aspect-[2/3] bg-dark-200">
-        {thumbnailUrl ? (
-          <img
-            src={thumbnailUrl}
-            alt={media.title}
-            className="w-full h-full object-cover"
-            loading="lazy"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-600">
-            <span className="text-4xl">{media.type === 'movie' ? '🎬' : '📺'}</span>
-          </div>
+    <Link to={mediaLink(media)} className="group block focus:outline-none" title={title}>
+      <div className="relative rounded-lg overflow-hidden ring-1 ring-white/5 transition group-hover:ring-2 group-hover:ring-primary-500 group-focus-visible:ring-2 group-focus-visible:ring-primary-400">
+        <Poster media={media} path={path} square={square} />
+        {media.type === 'episode' && (
+          <span className="absolute top-2 left-2 rounded bg-black/75 px-1.5 py-0.5 text-[11px] font-semibold tracking-wide">
+            {episodeCode(media)}
+          </span>
         )}
-
-        {/* Overlay on hover */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
-          <h3 className="font-semibold text-sm line-clamp-2 mb-1">{title}</h3>
-          {subtitle && <p className="text-xs text-gray-300 line-clamp-2">{subtitle}</p>}
-          {meta && <p className="text-xs text-gray-400 mt-1">{meta}</p>}
-          {media.contentRating && (
-            <span className="text-xs text-gray-400 mt-1">{media.contentRating}</span>
-          )}
-        </div>
       </div>
-
-      {/* Title below card (always visible) */}
-      <div className="p-3">
-        <h3 className="font-medium text-sm line-clamp-1">{title}</h3>
-        {subtitle && <p className="text-xs text-gray-400 mt-1 line-clamp-1">{subtitle}</p>}
-        {!subtitle && meta && <p className="text-xs text-gray-400 mt-1">{meta}</p>}
+      <div className="mt-2 px-0.5">
+        <div className="text-sm font-medium leading-tight line-clamp-1 group-hover:text-primary-300">{title}</div>
+        {subtitle && <div className="text-xs text-gray-400 mt-0.5 line-clamp-1">{subtitle}</div>}
       </div>
-    </div>
+    </Link>
   );
 };

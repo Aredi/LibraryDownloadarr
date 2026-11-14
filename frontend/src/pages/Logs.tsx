@@ -1,10 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
+import { Layout } from '../components/Layout';
 import { api } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
-import { useMobileMenu } from '../hooks/useMobileMenu';
 
 interface LogEntry {
   timestamp: string;
@@ -14,7 +12,6 @@ interface LogEntry {
 }
 
 export const Logs: React.FC = () => {
-  const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useMobileMenu();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -58,7 +55,7 @@ export const Logs: React.FC = () => {
       setTotal(result.total);
       setTotalPages(result.totalPages);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load logs');
+      setError(err.response?.data?.error || 'Impossible de charger les journaux');
     } finally {
       setIsLoading(false);
     }
@@ -86,23 +83,19 @@ export const Logs: React.FC = () => {
   };
 
   const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString();
+    return new Date(timestamp).toLocaleString('fr-FR');
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header onMenuClick={toggleMobileMenu} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+    <Layout>
           <div className="max-w-7xl mx-auto">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 md:mb-6">
-              <h1 className="text-2xl md:text-3xl font-bold">Application Logs</h1>
+              <h1 className="text-2xl md:text-3xl font-bold">Journaux de l’application</h1>
               <button
                 onClick={() => loadLogs()}
                 className="btn-primary text-sm md:text-base"
               >
-                🔄 Refresh
+                🔄 Actualiser
               </button>
             </div>
 
@@ -112,7 +105,7 @@ export const Logs: React.FC = () => {
                 {/* Level Filter */}
                 <div className="flex-1">
                   <label className="block text-xs md:text-sm font-medium text-gray-400 mb-2">
-                    Log Level
+                    Niveau
                   </label>
                   <select
                     value={level}
@@ -122,9 +115,9 @@ export const Logs: React.FC = () => {
                     }}
                     className="input w-full text-sm md:text-base"
                   >
-                    <option value="all">All Levels</option>
-                    <option value="error">Error</option>
-                    <option value="warn">Warning</option>
+                    <option value="all">Tous les niveaux</option>
+                    <option value="error">Erreur</option>
+                    <option value="warn">Avertissement</option>
                     <option value="info">Info</option>
                     <option value="debug">Debug</option>
                   </select>
@@ -133,18 +126,18 @@ export const Logs: React.FC = () => {
                 {/* Search Filter */}
                 <div className="flex-1">
                   <label className="block text-xs md:text-sm font-medium text-gray-400 mb-2">
-                    Search
+                    Recherche
                   </label>
                   <form onSubmit={handleSearch} className="flex gap-2">
                     <input
                       type="text"
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search in logs..."
+                      placeholder="Rechercher dans les journaux…"
                       className="input flex-1 text-sm md:text-base"
                     />
                     <button type="submit" className="btn-primary text-sm md:text-base">
-                      Search
+                      Rechercher
                     </button>
                   </form>
                 </div>
@@ -152,9 +145,9 @@ export const Logs: React.FC = () => {
 
               {/* Stats */}
               <div className="mt-4 text-xs md:text-sm text-gray-400">
-                Showing {logs.length} of {total} logs
-                {search && ` (filtered by "${search}")`}
-                {level !== 'all' && ` (level: ${level})`}
+                {logs.length} sur {total} entrées affichées
+                {search && ` (filtre : « ${search} »)`}
+                {level !== 'all' && ` (niveau : ${level})`}
               </div>
             </div>
 
@@ -165,12 +158,12 @@ export const Logs: React.FC = () => {
             )}
 
             {isLoading ? (
-              <div className="text-center text-gray-400 py-12">Loading logs...</div>
+              <div className="text-center text-gray-400 py-12">Chargement des journaux…</div>
             ) : logs.length === 0 ? (
               <div className="card p-6 md:p-8 text-center">
-                <p className="text-sm md:text-base text-gray-400">No logs found</p>
+                <p className="text-sm md:text-base text-gray-400">Aucun journal trouvé</p>
                 <p className="text-xs md:text-sm text-gray-500 mt-2">
-                  Logs are only available when file logging is enabled.
+                  Les journaux ne sont disponibles que si la journalisation dans un fichier est activée.
                 </p>
               </div>
             ) : (
@@ -207,7 +200,7 @@ export const Logs: React.FC = () => {
                             return (
                               <details className="mt-2">
                                 <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-400">
-                                  Show metadata
+                                  Afficher les métadonnées
                                 </summary>
                                 <pre className="mt-2 p-2 bg-dark-300 rounded text-xs text-gray-400 overflow-auto">
                                   {JSON.stringify(Object.fromEntries(filteredEntries), null, 2)}
@@ -229,7 +222,7 @@ export const Logs: React.FC = () => {
                       disabled={page === 1}
                       className="btn text-sm md:text-base disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Previous
+                      Précédent
                     </button>
                     <div className="flex items-center gap-1 md:gap-2">
                       {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
@@ -264,15 +257,13 @@ export const Logs: React.FC = () => {
                       disabled={page === totalPages}
                       className="btn text-sm md:text-base disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Next
+                      Suivant
                     </button>
                   </div>
                 )}
               </>
             )}
           </div>
-        </main>
-      </div>
-    </div>
+        </Layout>
   );
 };

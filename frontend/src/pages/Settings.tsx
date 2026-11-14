@@ -1,12 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
+import { Layout } from '../components/Layout';
 import { api } from '../services/api';
 import { Settings as SettingsType } from '../types';
-import { useMobileMenu } from '../hooks/useMobileMenu';
 
 export const Settings: React.FC = () => {
-  const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useMobileMenu();
   const [settings, setSettings] = useState<SettingsType>({
     plexUrl: '',
     hasPlexToken: false,
@@ -35,7 +32,7 @@ export const Settings: React.FC = () => {
       setSettings(data);
       setPlexUrl(data.plexUrl);
     } catch (err) {
-      setMessage({ type: 'error', text: 'Failed to load settings' });
+      setMessage({ type: 'error', text: 'Impossible de charger les paramètres' });
     } finally {
       setIsLoading(false);
     }
@@ -57,11 +54,11 @@ export const Settings: React.FC = () => {
 
       await api.updateSettings(updateData);
 
-      setMessage({ type: 'success', text: 'Settings saved successfully' });
+      setMessage({ type: 'success', text: 'Paramètres enregistrés' });
       await loadSettings();
       setPlexToken('');
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to save settings' });
+      setMessage({ type: 'error', text: err.response?.data?.error || 'Impossible d’enregistrer les paramètres' });
     } finally {
       setIsSaving(false);
     }
@@ -77,13 +74,13 @@ export const Settings: React.FC = () => {
       const tokenToTest = plexToken || (settings.hasPlexToken ? 'saved' : '');
 
       if (!urlToTest) {
-        setMessage({ type: 'error', text: 'Please enter a Plex server URL' });
+        setMessage({ type: 'error', text: 'Saisis l’URL du serveur Plex' });
         setIsTesting(false);
         return;
       }
 
       if (!tokenToTest && !settings.hasPlexToken) {
-        setMessage({ type: 'error', text: 'Please enter a Plex token' });
+        setMessage({ type: 'error', text: 'Saisis un Token Plex' });
         setIsTesting(false);
         return;
       }
@@ -93,12 +90,12 @@ export const Settings: React.FC = () => {
         plexToken || undefined
       );
       if (connected) {
-        setMessage({ type: 'success', text: 'Successfully connected to Plex server' });
+        setMessage({ type: 'success', text: 'Connexion au serveur Plex réussie' });
       } else {
-        setMessage({ type: 'error', text: 'Failed to connect to Plex server' });
+        setMessage({ type: 'error', text: 'Impossible de se connecter au serveur Plex' });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: 'Failed to test connection' });
+      setMessage({ type: 'error', text: 'Impossible de tester la connexion' });
     } finally {
       setIsTesting(false);
     }
@@ -111,26 +108,26 @@ export const Settings: React.FC = () => {
 
     // Validation
     if (!currentPassword || !newPassword || !confirmPassword) {
-      setPasswordMessage({ type: 'error', text: 'All fields are required' });
+      setPasswordMessage({ type: 'error', text: 'Tous les champs sont obligatoires' });
       setIsChangingPassword(false);
       return;
     }
 
     if (newPassword.length < 6) {
-      setPasswordMessage({ type: 'error', text: 'New password must be at least 6 characters long' });
+      setPasswordMessage({ type: 'error', text: 'Le nouveau mot de passe doit faire au moins 6 caractères' });
       setIsChangingPassword(false);
       return;
     }
 
     if (newPassword !== confirmPassword) {
-      setPasswordMessage({ type: 'error', text: 'New passwords do not match' });
+      setPasswordMessage({ type: 'error', text: 'Les nouveaux mots de passe ne correspondent pas' });
       setIsChangingPassword(false);
       return;
     }
 
     try {
       await api.changePassword(currentPassword, newPassword);
-      setPasswordMessage({ type: 'success', text: 'Password changed successfully' });
+      setPasswordMessage({ type: 'success', text: 'Mot de passe modifié' });
 
       // Clear form
       setCurrentPassword('');
@@ -139,7 +136,7 @@ export const Settings: React.FC = () => {
     } catch (err: any) {
       setPasswordMessage({
         type: 'error',
-        text: err.response?.data?.error || 'Failed to change password'
+        text: err.response?.data?.error || 'Impossible de modifier le mot de passe'
       });
     } finally {
       setIsChangingPassword(false);
@@ -148,35 +145,27 @@ export const Settings: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex flex-col">
-        <Header onMenuClick={toggleMobileMenu} />
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-          <main className="flex-1 p-4 md:p-8 overflow-y-auto flex items-center justify-center">
-            <div className="text-gray-400">Loading...</div>
-          </main>
-        </div>
-      </div>
+      <Layout>
+          <div className="flex items-center justify-center py-20">
+            <div className="text-gray-400">Chargement…</div>
+          </div>
+      </Layout>
     );
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header onMenuClick={toggleMobileMenu} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+    <Layout>
           <div className="max-w-3xl">
-            <h1 className="text-2xl md:text-3xl font-bold mb-4 md:mb-6">Settings</h1>
+            <h1 className="text-2xl md:text-3xl font-bold mb-4 md:mb-6">Paramètres</h1>
 
             <div className="card p-4 md:p-6">
               <form onSubmit={handleSave} className="space-y-4 md:space-y-6">
                 <div>
-                  <h2 className="text-xl md:text-2xl font-semibold mb-4">Plex Server Configuration</h2>
+                  <h2 className="text-xl md:text-2xl font-semibold mb-4">Configuration du serveur Plex</h2>
 
                   <div className="space-y-3 md:space-y-4">
                     <div>
-                      <label className="block text-sm md:text-base font-medium mb-2">Plex Server URL</label>
+                      <label className="block text-sm md:text-base font-medium mb-2">URL du serveur Plex</label>
                       <input
                         type="text"
                         className="input text-sm md:text-base"
@@ -185,11 +174,11 @@ export const Settings: React.FC = () => {
                         onChange={(e) => setPlexUrl(e.target.value)}
                       />
                       <p className="text-xs md:text-sm text-gray-500 mt-1">
-                        The URL of your Plex Media Server. For local Docker containers, use:
+                        L’URL de ton Plex Media Server. Pour des conteneurs Docker locaux, utilise :
                         <br />
-                        • <code className="text-gray-400">http://127.0.0.1:32400</code> or <code className="text-gray-400">http://localhost:32400</code>
+                        • <code className="text-gray-400">http://127.0.0.1:32400</code> ou <code className="text-gray-400">http://localhost:32400</code>
                         <br />
-                        • <code className="text-gray-400">http://host.docker.internal:32400</code> (from Docker container)
+                        • <code className="text-gray-400">http://host.docker.internal:32400</code> (depuis un conteneur Docker)
                       </p>
                     </div>
 
@@ -199,19 +188,19 @@ export const Settings: React.FC = () => {
                         type="password"
                         className="input text-sm md:text-base"
                         placeholder={
-                          settings.hasPlexToken ? 'Token configured (enter new to update)' : 'Enter token'
+                          settings.hasPlexToken ? 'Token configuré (saisis-en un nouveau pour le changer)' : 'Saisis le Token'
                         }
                         value={plexToken}
                         onChange={(e) => setPlexToken(e.target.value)}
                       />
                       <p className="text-xs md:text-sm text-gray-500 mt-1">
-                        Your Plex authentication token (admin token for server access)
+                        Ton Token d’authentification Plex (Token admin pour accéder au serveur)
                       </p>
                     </div>
 
                     {settings.plexServerName && (
                       <div>
-                        <label className="block text-sm md:text-base font-medium mb-2">Configured Server</label>
+                        <label className="block text-sm md:text-base font-medium mb-2">Serveur configuré</label>
                         <input
                           type="text"
                           className="input text-sm md:text-base bg-dark-200"
@@ -219,8 +208,8 @@ export const Settings: React.FC = () => {
                           readOnly
                         />
                         <p className="text-xs md:text-sm text-gray-500 mt-1">
-                          Server identity is automatically detected when you save your settings.
-                          Users logging in via Plex OAuth will only be granted access if they have permission to this server.
+                          L’identité du serveur est détectée automatiquement quand tu enregistres tes paramètres.
+                          Les utilisateurs qui se connectent via Plex OAuth n’auront accès que s’ils ont les droits sur ce serveur.
                         </p>
                       </div>
                     )}
@@ -241,7 +230,7 @@ export const Settings: React.FC = () => {
 
                 <div className="flex flex-col sm:flex-row gap-3 md:gap-4">
                   <button type="submit" disabled={isSaving} className="btn-primary text-sm md:text-base">
-                    {isSaving ? 'Saving...' : 'Save Settings'}
+                    {isSaving ? 'Enregistrement…' : 'Enregistrer'}
                   </button>
 
                   <button
@@ -250,45 +239,45 @@ export const Settings: React.FC = () => {
                     disabled={isTesting || !(plexUrl || settings.plexUrl)}
                     className="btn-secondary text-sm md:text-base"
                   >
-                    {isTesting ? 'Testing...' : 'Test Connection'}
+                    {isTesting ? 'Test en cours…' : 'Tester la connexion'}
                   </button>
                 </div>
               </form>
             </div>
 
             <div className="card p-4 md:p-6 mt-4 md:mt-6">
-              <h2 className="text-xl md:text-2xl font-semibold mb-4">Change Password</h2>
+              <h2 className="text-xl md:text-2xl font-semibold mb-4">Changer le mot de passe</h2>
               <form onSubmit={handleChangePassword} className="space-y-3 md:space-y-4">
                 <div>
-                  <label className="block text-sm md:text-base font-medium mb-2">Current Password</label>
+                  <label className="block text-sm md:text-base font-medium mb-2">Mot de passe actuel</label>
                   <input
                     type="password"
                     className="input text-sm md:text-base"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="Enter current password"
+                    placeholder="Saisis ton mot de passe actuel"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm md:text-base font-medium mb-2">New Password</label>
+                  <label className="block text-sm md:text-base font-medium mb-2">Nouveau mot de passe</label>
                   <input
                     type="password"
                     className="input text-sm md:text-base"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Enter new password (min. 6 characters)"
+                    placeholder="Saisis le nouveau mot de passe (6 caractères min.)"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm md:text-base font-medium mb-2">Confirm New Password</label>
+                  <label className="block text-sm md:text-base font-medium mb-2">Confirme le nouveau mot de passe</label>
                   <input
                     type="password"
                     className="input text-sm md:text-base"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Re-enter new password"
+                    placeholder="Saisis-le à nouveau"
                   />
                 </div>
 
@@ -309,23 +298,21 @@ export const Settings: React.FC = () => {
                   disabled={isChangingPassword}
                   className="btn-primary text-sm md:text-base"
                 >
-                  {isChangingPassword ? 'Changing Password...' : 'Change Password'}
+                  {isChangingPassword ? 'Modification…' : 'Changer le mot de passe'}
                 </button>
               </form>
             </div>
 
             <div className="card p-4 md:p-6 mt-4 md:mt-6">
-              <h2 className="text-xl md:text-2xl font-semibold mb-4">About</h2>
+              <h2 className="text-xl md:text-2xl font-semibold mb-4">À propos</h2>
               <div className="space-y-2 text-xs md:text-sm text-gray-400">
                 <p>
                   <span className="font-medium text-gray-300">LibraryDownloadarr</span> v1.0.0
                 </p>
-                <p>A modern web application for downloading media from your media library server</p>
+                <p>Une application web moderne pour télécharger les médias de ton serveur multimédia</p>
               </div>
             </div>
           </div>
-        </main>
-      </div>
-    </div>
+        </Layout>
   );
 };

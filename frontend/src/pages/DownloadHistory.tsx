@@ -1,13 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
+import { Layout } from '../components/Layout';
 import { api } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
-import { useMobileMenu } from '../hooks/useMobileMenu';
 
 export const DownloadHistory: React.FC = () => {
-  const { isMobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useMobileMenu();
   const [history, setHistory] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -34,33 +31,29 @@ export const DownloadHistory: React.FC = () => {
       const data = await api.getAllDownloadHistory(200);
       setHistory(data);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load download history');
+      setError(err.response?.data?.error || 'Impossible de charger l’historique des téléchargements');
     } finally {
       setIsLoading(false);
     }
   };
 
   const formatFileSize = (bytes: number): string => {
-    if (!bytes) return 'N/A';
-    if (bytes === 0) return '0 Bytes';
+    if (!bytes) return 'N/D';
+    if (bytes === 0) return '0 o';
     const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const sizes = ['o', 'Ko', 'Mo', 'Go', 'To'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
   };
 
   const formatDate = (timestamp: number): string => {
-    return new Date(timestamp).toLocaleString();
+    return new Date(timestamp).toLocaleString('fr-FR');
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header onMenuClick={toggleMobileMenu} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar isOpen={isMobileMenuOpen} onClose={closeMobileMenu} />
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+    <Layout>
           <div className="max-w-7xl mx-auto">
-            <h1 className="text-2xl md:text-3xl font-bold mb-4 md:mb-6">Download History</h1>
+            <h1 className="text-2xl md:text-3xl font-bold mb-4 md:mb-6">Historique des téléchargements</h1>
 
             {error && (
               <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg mb-4 md:mb-6 text-sm md:text-base">
@@ -69,10 +62,10 @@ export const DownloadHistory: React.FC = () => {
             )}
 
             {isLoading ? (
-              <div className="text-center text-gray-400 py-12">Loading...</div>
+              <div className="text-center text-gray-400 py-12">Chargement…</div>
             ) : history.length === 0 ? (
               <div className="card p-6 md:p-8 text-center">
-                <p className="text-sm md:text-base text-gray-400">No downloads yet</p>
+                <p className="text-sm md:text-base text-gray-400">Aucun téléchargement pour l’instant</p>
               </div>
             ) : (
               <div className="card overflow-hidden">
@@ -81,16 +74,16 @@ export const DownloadHistory: React.FC = () => {
                     <thead className="bg-dark-200">
                       <tr>
                         <th className="px-4 md:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                          User
+                          Utilisateur
                         </th>
                         <th className="px-4 md:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                          Media Title
+                          Titre
                         </th>
                         <th className="px-4 md:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                          File Size
+                          Taille
                         </th>
                         <th className="px-4 md:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                          Downloaded At
+                          Téléchargé le
                         </th>
                       </tr>
                     </thead>
@@ -98,7 +91,7 @@ export const DownloadHistory: React.FC = () => {
                       {history.map((item) => (
                         <tr key={item.id} className="hover:bg-dark-200/50">
                           <td className="px-4 md:px-6 py-3 md:py-4 whitespace-nowrap text-xs md:text-sm">
-                            {item.username || 'Unknown User'}
+                            {item.username || 'Utilisateur inconnu'}
                           </td>
                           <td className="px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm">{item.media_title}</td>
                           <td className="px-4 md:px-6 py-3 md:py-4 whitespace-nowrap text-xs md:text-sm text-gray-400">
@@ -115,8 +108,6 @@ export const DownloadHistory: React.FC = () => {
               </div>
             )}
           </div>
-        </main>
-      </div>
-    </div>
+        </Layout>
   );
 };

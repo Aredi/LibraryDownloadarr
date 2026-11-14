@@ -1,41 +1,55 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MediaItem } from '../types';
 import { MediaCard } from './MediaCard';
-import { useNavigate } from 'react-router-dom';
 
-interface MediaGridProps {
-  media: MediaItem[];
-  isLoading?: boolean;
-}
+const PAGE = 90;
 
-export const MediaGrid: React.FC<MediaGridProps> = ({ media, isLoading }) => {
-  const navigate = useNavigate();
+export const GRID_CLASSES = 'grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-4 gap-y-6';
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="text-gray-400">Loading...</div>
+export const GridSkeleton: React.FC<{ count?: number }> = ({ count = 18 }) => (
+  <div className={GRID_CLASSES}>
+    {Array.from({ length: count }).map((_, i) => (
+      <div key={i}>
+        <div className="aspect-[2/3] rounded-lg bg-white/5 animate-pulse" />
+        <div className="h-3 mt-2 w-3/4 rounded bg-white/5 animate-pulse" />
       </div>
-    );
-  }
+    ))}
+  </div>
+);
 
-  if (media.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="text-gray-400">No media found</div>
-      </div>
+/** Poster grid that renders progressively, so libraries with thousands of items stay fast. */
+export const MediaGrid: React.FC<{ media: MediaItem[]; isLoading?: boolean; emptyText?: string }> = ({
+  media,
+  isLoading,
+  emptyText = 'Rien à afficher ici.',
+}) => {
+  const [visible, setVisible] = useState(PAGE);
+  const sentinel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setVisible(PAGE), [media]);
+
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => entries[0].isIntersecting && setVisible((v) => v + PAGE),
+      { rootMargin: '800px' }
     );
-  }
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [media, visible]);
+
+  if (isLoading) return <GridSkeleton />;
+  if (media.length === 0) return <div className="py-20 text-center text-gray-500">{emptyText}</div>;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4">
-      {media.map((item) => (
-        <MediaCard
-          key={item.ratingKey}
-          media={item}
-          onClick={() => navigate(`/media/${item.ratingKey}`)}
-        />
-      ))}
-    </div>
+    <>
+      <div className={GRID_CLASSES}>
+        {media.slice(0, visible).map((item) => (
+          <MediaCard key={item.ratingKey} media={item} />
+        ))}
+      </div>
+      {visible < media.length && <div ref={sentinel} className="h-10" />}
+    </>
   );
 };
