@@ -36,7 +36,7 @@ export const Dashboard: React.FC = () => {
     if (!user) return;
     Promise.all([
       api.getLibraries(),
-      api.getRecentlyAdded(200),
+      api.getRecentlyAdded(0, 24),
       user.isAdmin ? api.getDownloadStats().catch(() => null) : Promise.resolve(null),
     ])
       .then(([libs, media, s]) => {

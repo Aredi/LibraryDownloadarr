@@ -604,6 +604,24 @@ export class PlexService {
     }
   }
 
+  /** Every episode of a show, all seasons, in one request. */
+  async getAllEpisodes(showRatingKey: string, userToken?: string): Promise<PlexMedia[]> {
+    const response = await axios.get(`${this.plexUrl}/library/metadata/${showRatingKey}/allLeaves`, this.getAxiosConfig({
+      'X-Plex-Token': userToken || '',
+      'Accept': 'application/json',
+    }));
+    return response.data?.MediaContainer?.Metadata || [];
+  }
+
+  /** Metadata of several items in one request (Plex accepts comma-separated keys). */
+  async getMetadataBatch(ratingKeys: string[], userToken?: string): Promise<PlexMedia[]> {
+    const response = await axios.get(`${this.plexUrl}/library/metadata/${ratingKeys.join(',')}`, this.getAxiosConfig({
+      'X-Plex-Token': userToken || '',
+      'Accept': 'application/json',
+    }));
+    return response.data?.MediaContainer?.Metadata || [];
+  }
+
   async search(query: string, userToken?: string): Promise<PlexMedia[]> {
     if (!this.plexUrl) {
       throw new Error('Plex server not configured');
@@ -637,7 +655,7 @@ export class PlexService {
     }
   }
 
-  async getRecentlyAdded(userToken?: string, limit: number = 20): Promise<PlexMedia[]> {
+  async getRecentlyAdded(userToken?: string, limit: number = 20, perLibrary?: number): Promise<PlexMedia[]> {
     if (!this.plexUrl) {
       throw new Error('Plex server not configured');
     }
@@ -650,7 +668,7 @@ export class PlexService {
       });
 
       const allMedia: PlexMedia[] = [];
-      const itemsPerLibrary = Math.ceil(limit / libraries.length) + 5;
+      const itemsPerLibrary = perLibrary || Math.ceil(limit / libraries.length) + 5;
 
       for (const library of libraries) {
         try {
@@ -683,10 +701,11 @@ export class PlexService {
         }
       }
 
-      const sorted = allMedia
+      const sortedAll = allMedia
         .filter(m => m.addedAt)
-        .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
-        .slice(0, limit);
+        .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      // perLibrary: keep every library's items (home page rows), no global cut
+      const sorted = perLibrary ? sortedAll : sortedAll.slice(0, limit);
 
       logger.debug('Recently added query completed', {
         requestedLimit: limit,

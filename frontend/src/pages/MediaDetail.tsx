@@ -14,7 +14,7 @@ import { formatBytes, formatDate, formatDuration, isDownloadBlocked, itemSize, p
 
 const Hero: React.FC<{ media: MediaItem; children?: React.ReactNode }> = ({ media, children }) => {
   const [showFull, setShowFull] = useState(false);
-  const backdrop = media.art ? api.getThumbnailUrl(media.ratingKey, media.art) : null;
+  const backdrop = media.art ? api.getThumbnailUrl(media.ratingKey, media.art, 1280, 720) : null;
   const square = media.type === 'album';
   const facts = [
     media.type === 'album' ? media.parentTitle : null,
@@ -78,7 +78,7 @@ const BlockedNotice = () => (
 
 // ---------- Movie ----------
 
-const MovieVersions: React.FC<{ media: MediaItem; canDownload: boolean; onDownload: (r: DownloadRequest[]) => boolean }> = ({
+const MovieVersions: React.FC<{ media: MediaItem; canDownload: boolean; onDownload: (r: DownloadRequest[]) => Promise<boolean> }> = ({
   media,
   canDownload,
   onDownload,
@@ -101,7 +101,7 @@ const MovieVersions: React.FC<{ media: MediaItem; canDownload: boolean; onDownlo
               <span className="text-sm text-gray-400 tabular-nums">{formatBytes(part.size)}</span>
               {canDownload && (
                 <button
-                  onClick={() => onDownload([{ url: api.getDownloadUrl(media.ratingKey, part.key), label: media.title, size: part.size }])}
+                  onClick={() => onDownload([{ url: api.getDownloadUrl(media.ratingKey, part.key), label: media.title, size: part.size, check: { ratingKey: media.ratingKey, partKey: part.key } }])}
                   className="btn-primary flex items-center gap-2 text-sm py-1.5"
                 >
                   <IconDownload className="w-4 h-4" /> Télécharger
@@ -123,7 +123,7 @@ const SeasonBrowser: React.FC<{
   show: MediaItem;
   seasons: MediaItem[];
   canDownload: boolean;
-  onDownload: (r: DownloadRequest[]) => boolean;
+  onDownload: (r: DownloadRequest[]) => Promise<boolean>;
 }> = ({ show, seasons, canDownload, onDownload }) => {
   const [params, setParams] = useSearchParams();
   const [episodes, setEpisodes] = useState<Record<string, MediaItem[]>>({});
@@ -283,8 +283,8 @@ export const MediaDetail: React.FC = () => {
 
   const downloadAllSeasons = () => {
     const eps = children.reduce((s, c) => s + (c.leafCount || 0), 0);
-    if (!window.confirm(`Télécharger les ${children.length} saisons (${eps} épisodes) ? Chaque saison arrive dans son propre fichier ZIP.`)) return;
-    download(children.map((s) => ({ url: api.getSeasonDownloadUrl(s.ratingKey), label: `${media.title} – ${seasonLabel(s)}` })));
+    if (!window.confirm(`Télécharger les ${children.length} saisons (${eps} épisodes) dans un seul ZIP, un dossier par saison ?`)) return;
+    void download([{ url: api.getShowDownloadUrl(media.ratingKey), label: `${media.title} (ZIP)` }]);
   };
 
   return (
@@ -298,7 +298,7 @@ export const MediaDetail: React.FC = () => {
       <Hero media={media}>
         {canDownload && media.type === 'movie' && mainPart && (
           <button
-            onClick={() => download([{ url: api.getDownloadUrl(media.ratingKey, mainPart.key), label: media.title, size: mainPart.size }])}
+            onClick={() => download([{ url: api.getDownloadUrl(media.ratingKey, mainPart.key), label: media.title, size: mainPart.size, check: { ratingKey: media.ratingKey, partKey: mainPart.key } }])}
             className="btn-primary flex items-center gap-2 px-5 py-2.5"
           >
             <IconDownload /> Télécharger
@@ -309,7 +309,7 @@ export const MediaDetail: React.FC = () => {
         )}
         {canDownload && media.type === 'show' && children.length > 1 && (
           <button onClick={downloadAllSeasons} className="btn-secondary flex items-center gap-2">
-            <IconArchive className="w-4 h-4" /> Toutes les saisons
+            <IconArchive className="w-4 h-4" /> Toute la série en ZIP
           </button>
         )}
         {canDownload && media.type === 'album' && children.length > 0 && (
@@ -338,7 +338,7 @@ export const MediaDetail: React.FC = () => {
 
         {!['movie', 'show', 'album'].includes(media.type) && mainPart && canDownload && (
           <button
-            onClick={() => download([{ url: api.getDownloadUrl(media.ratingKey, mainPart.key), label: media.title, size: mainPart.size }])}
+            onClick={() => download([{ url: api.getDownloadUrl(media.ratingKey, mainPart.key), label: media.title, size: mainPart.size, check: { ratingKey: media.ratingKey, partKey: mainPart.key } }])}
             className="btn-primary flex items-center gap-2"
           >
             <IconDownload /> Télécharger · {formatBytes(mainPart.size)}

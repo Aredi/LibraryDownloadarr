@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { DatabaseService } from '../models/database';
 import { logger } from '../utils/logger';
@@ -16,14 +17,36 @@ export interface AuthRequest extends Request {
   };
 }
 
-// allowQueryToken: also accept ?token=... so the browser can download files natively
+// Download tickets: short-lived keys put in download URLs instead of the session token.
+// Browsers keep download URLs in their history, so a leaked ticket must expire fast.
+// shortcut: in-memory, so tickets are lost on restart and not shared between processes (one container).
+export const TICKET_TTL_MS = 2 * 60 * 1000;
+const tickets = new Map<string, { sessionToken: string; expires: number }>();
+
+export const issueDownloadTicket = (sessionToken: string, now = Date.now()): string => {
+  for (const [key, t] of tickets) if (t.expires <= now) tickets.delete(key);
+  const ticket = crypto.randomBytes(24).toString('hex');
+  tickets.set(ticket, { sessionToken, expires: now + TICKET_TTL_MS });
+  return ticket;
+};
+
+const resolveTicket = (ticket: unknown, now = Date.now()): string | null => {
+  if (typeof ticket !== 'string') return null;
+  const t = tickets.get(ticket);
+  return t && t.expires > now ? t.sessionToken : null;
+};
+
+// allowTicket: also accept ?ticket=... so the browser can download files natively
 // (plain <a href> links can't send an Authorization header).
-export const createAuthMiddleware = (db: DatabaseService, options: { allowQueryToken?: boolean } = {}) => {
+export const createAuthMiddleware = (db: DatabaseService, options: { allowTicket?: boolean } = {}) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const authHeader = req.headers.authorization;
-      const queryToken = options.allowQueryToken && typeof req.query.token === 'string' ? req.query.token : null;
-      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : queryToken;
+      const token = authHeader?.startsWith('Bearer ')
+        ? authHeader.substring(7)
+        : options.allowTicket
+          ? resolveTicket(req.query.ticket)
+          : null;
 
       if (!token) {
         return res.status(401).json({ error: 'No token provided' });

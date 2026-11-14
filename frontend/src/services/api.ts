@@ -116,9 +116,10 @@ class ApiClient {
   }
 
   // Media endpoints
-  async getRecentlyAdded(limit: number = 20): Promise<MediaItem[]> {
+  /** perLibrary: the N newest items of every library instead of N overall. */
+  async getRecentlyAdded(limit: number = 20, perLibrary?: number): Promise<MediaItem[]> {
     const response = await this.client.get<{ media: MediaItem[] }>('/media/recently-added', {
-      params: { limit },
+      params: { limit, perLibrary },
     });
     return response.data.media;
   }
@@ -169,44 +170,40 @@ class ApiClient {
     return response.data.stats;
   }
 
-  // Download URLs carry the session token so the browser can save files natively
-  // (streamed straight to disk, with its own progress bar) instead of buffering in memory.
-  private withToken(url: string): string {
-    const token = localStorage.getItem('token') || '';
-    return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
-  }
-
+  // Download URLs below carry no credentials: DownloadContext adds a short-lived ticket
+  // (see getDownloadTicket) right before handing them to the browser.
   getDownloadUrl(ratingKey: string, partKey: string): string {
-    return this.withToken(`/api/media/${ratingKey}/download?partKey=${encodeURIComponent(partKey)}`);
+    return `/api/media/${ratingKey}/download?partKey=${encodeURIComponent(partKey)}`;
   }
 
-  async getSeasonSize(seasonRatingKey: string): Promise<{ totalSize: number; fileCount: number; totalSizeGB: string }> {
-    const response = await this.client.get<{ totalSize: number; fileCount: number; totalSizeGB: string }>(
-      `/media/season/${seasonRatingKey}/size`
-    );
-    return response.data;
-  }
-
-  async getAlbumSize(albumRatingKey: string): Promise<{ totalSize: number; fileCount: number; totalSizeGB: string }> {
-    const response = await this.client.get<{ totalSize: number; fileCount: number; totalSizeGB: string }>(
-      `/media/album/${albumRatingKey}/size`
-    );
-    return response.data;
+  /** check: verify first that this file may be downloaded; throws with the server's reason if not. */
+  async getDownloadTicket(check?: { ratingKey: string; partKey: string }): Promise<string> {
+    const response = await this.client.post<{ ticket: string }>('/media/download-ticket', check || {});
+    return response.data.ticket;
   }
 
   getSeasonDownloadUrl(seasonRatingKey: string): string {
-    return this.withToken(`/api/media/season/${seasonRatingKey}/download`);
+    return `/api/media/season/${seasonRatingKey}/download`;
+  }
+
+  getShowDownloadUrl(showRatingKey: string): string {
+    return `/api/media/show/${showRatingKey}/download`;
   }
 
   getAlbumDownloadUrl(albumRatingKey: string): string {
-    return this.withToken(`/api/media/album/${albumRatingKey}/download`);
+    return `/api/media/album/${albumRatingKey}/download`;
   }
 
-  /** width: ask Plex for a resized image (much lighter than the original poster). */
-  getThumbnailUrl(ratingKey: string, path: string, width?: number): string {
+  /** One ZIP with the given episodes/tracks. */
+  getZipUrl(ratingKeys: string[]): string {
+    return `/api/media/zip?keys=${ratingKeys.join(',')}`;
+  }
+
+  /** width/height: ask Plex for a resized image (much lighter than the original). Height defaults to a 2:3 poster. */
+  getThumbnailUrl(ratingKey: string, path: string, width?: number, height?: number): string {
     const token = localStorage.getItem('token');
     const source = width
-      ? `/photo/:/transcode?width=${width}&height=${Math.round(width * 1.5)}&minSize=1&upscale=1&url=${encodeURIComponent(path)}`
+      ? `/photo/:/transcode?width=${width}&height=${height || Math.round(width * 1.5)}&minSize=1&upscale=1&url=${encodeURIComponent(path)}`
       : path;
     return `/api/media/thumb/${ratingKey}?path=${encodeURIComponent(source)}&token=${token}`;
   }

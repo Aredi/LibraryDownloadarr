@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Layout } from '../components/Layout';
+import { formatBytes } from '../utils/format';
 import { api } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
@@ -35,15 +36,6 @@ export const DownloadHistory: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (!bytes) return 'N/D';
-    if (bytes === 0) return '0 o';
-    const k = 1024;
-    const sizes = ['o', 'Ko', 'Mo', 'Go', 'To'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
   };
 
   const formatDate = (timestamp: number): string => {
@@ -95,7 +87,7 @@ export const DownloadHistory: React.FC = () => {
                           </td>
                           <td className="px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm">{item.media_title}</td>
                           <td className="px-4 md:px-6 py-3 md:py-4 whitespace-nowrap text-xs md:text-sm text-gray-400">
-                            {formatFileSize(item.file_size)}
+                            {formatBytes(item.file_size)}
                           </td>
                           <td className="px-4 md:px-6 py-3 md:py-4 whitespace-nowrap text-xs md:text-sm text-gray-400">
                             {formatDate(item.downloaded_at)}

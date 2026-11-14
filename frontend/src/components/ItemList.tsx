@@ -3,13 +3,15 @@ import { MediaItem } from '../types';
 import { api } from '../services/api';
 import { DownloadRequest } from '../contexts/DownloadContext';
 import { firstPart, formatBytes, formatDate, formatDuration, itemSize, pad2, qualityLabel, episodeCode } from '../utils/format';
-import { IconCheck, IconChevronDown, IconDownload } from './Icons';
+import { IconArchive, IconCheck, IconChevronDown, IconDownload } from './Icons';
+
+const MAX_SEPARATE = 5;
 
 export const requestFor = (item: MediaItem): DownloadRequest | null => {
   const part = firstPart(item);
   if (!part) return null;
   const label = item.type === 'episode' && item.grandparentTitle ? `${item.grandparentTitle} ${episodeCode(item)}` : item.title;
-  return { url: api.getDownloadUrl(item.ratingKey, part.key), label, size: part.size };
+  return { url: api.getDownloadUrl(item.ratingKey, part.key), label, size: part.size, check: { ratingKey: item.ratingKey, partKey: part.key } };
 };
 
 const Checkbox: React.FC<{ checked: boolean; indeterminate?: boolean; onChange: (shiftKey: boolean) => void; label: string }> = ({
@@ -40,7 +42,7 @@ interface ItemListProps {
   items: MediaItem[];
   kind: 'episode' | 'track';
   canDownload: boolean;
-  onDownload: (requests: DownloadRequest[]) => boolean;
+  onDownload: (requests: DownloadRequest[]) => Promise<boolean>;
   highlightKey?: string | null;
   /** Extra buttons on the right of the toolbar (e.g. "season as ZIP") */
   actions?: React.ReactNode;
@@ -60,6 +62,7 @@ export const ItemList: React.FC<ItemListProps> = ({ items, kind, canDownload, on
     }
   }, [highlightKey, items]);
 
+  const word = kind === 'episode' ? 'épisode' : 'piste';
   const downloadable = items.filter((i) => firstPart(i));
   const selectedItems = downloadable.filter((i) => selected.has(i.ratingKey));
   const selectedSize = selectedItems.reduce((s, i) => s + itemSize(i), 0);
@@ -88,12 +91,17 @@ export const ItemList: React.FC<ItemListProps> = ({ items, kind, canDownload, on
     });
   };
 
-  const downloadSelection = () => {
-    const ok = onDownload(selectedItems.map(requestFor).filter(Boolean) as DownloadRequest[]);
-    if (ok) setSelected(new Set());
+  // Up to MAX_SEPARATE files go out one by one; more become a single ZIP, because browsers
+  // only keep ~6 connections per server and parallel downloads would freeze the app.
+  const asZip = selectedItems.length > MAX_SEPARATE;
+
+  const downloadSelection = async () => {
+    const requests = asZip
+      ? [{ url: api.getZipUrl(selectedItems.map((i) => i.ratingKey)), label: `${selectedItems.length} ${word}s (ZIP)`, size: selectedSize }]
+      : (selectedItems.map(requestFor).filter(Boolean) as DownloadRequest[]);
+    if (await onDownload(requests)) setSelected(new Set());
   };
 
-  const word = kind === 'episode' ? 'épisode' : 'piste';
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
@@ -118,7 +126,8 @@ export const ItemList: React.FC<ItemListProps> = ({ items, kind, canDownload, on
         <div className="ml-auto flex flex-wrap gap-2">
           {selectedItems.length > 0 ? (
             <button onClick={downloadSelection} className="btn-primary flex items-center gap-2 text-sm py-1.5">
-              <IconDownload className="w-4 h-4" /> Télécharger la sélection
+              {asZip ? <IconArchive className="w-4 h-4" /> : <IconDownload className="w-4 h-4" />}
+              {asZip ? 'Télécharger la sélection en ZIP' : 'Télécharger la sélection'}
             </button>
           ) : (
             actions
@@ -174,7 +183,7 @@ export const ItemList: React.FC<ItemListProps> = ({ items, kind, canDownload, on
                     onClick={(e) => {
                       e.stopPropagation();
                       const r = requestFor(item);
-                      if (r) onDownload([r]);
+                      if (r) void onDownload([r]);
                     }}
                     className="p-2 rounded-lg text-gray-300 hover:text-white hover:bg-primary-500/80"
                     title={`Télécharger (${formatBytes(part.size)})`}

@@ -1,9 +1,11 @@
 import React, { createContext, useCallback, useContext, useRef, useState, ReactNode } from 'react';
+import { api } from '../services/api';
 
 export interface DownloadRequest {
-  url: string; // already authenticated (see api.getDownloadUrl & co)
+  url: string; // api.getDownloadUrl & co, without credentials
   label: string; // shown to the user
   size?: number; // bytes, used for the big-download warning
+  check?: { ratingKey: string; partKey: string }; // single file: ask the server first if it may be downloaded
 }
 
 interface Toast {
@@ -13,8 +15,8 @@ interface Toast {
 }
 
 interface DownloadContextType {
-  /** Hands files to the browser's own download manager. Returns false if the user cancelled. */
-  download: (requests: DownloadRequest[]) => boolean;
+  /** Hands files to the browser's own download manager. Resolves false if nothing was started. */
+  download: (requests: DownloadRequest[]) => Promise<boolean>;
   notify: (message: string, tone?: Toast['tone']) => void;
   toasts: Toast[];
   dismiss: (id: number) => void;
@@ -56,7 +58,7 @@ export const DownloadProvider: React.FC<{ children: ReactNode }> = ({ children }
   );
 
   const download = useCallback(
-    (requests: DownloadRequest[]) => {
+    async (requests: DownloadRequest[]) => {
       if (requests.length === 0) return false;
       const total = requests.reduce((s, r) => s + (r.size || 0), 0);
       if (total > BIG_DOWNLOAD) {
@@ -66,19 +68,28 @@ export const DownloadProvider: React.FC<{ children: ReactNode }> = ({ children }
         if (!go) return false;
       }
 
-      // Space out multiple files: browsers ignore several downloads fired in the same tick.
-      requests.forEach((r, i) => setTimeout(() => triggerBrowserDownload(r.url), i * 800));
+      // One short-lived ticket per file; the server also checks permissions here,
+      // so refusals show up as a readable message instead of a failed browser download.
+      const results = await Promise.allSettled(requests.map((r) => api.getDownloadTicket(r.check)));
+      const started: string[] = [];
+      results.forEach((result, i) => {
+        const r = requests[i];
+        if (result.status === 'fulfilled') {
+          // Space out multiple files: browsers ignore several downloads fired in the same tick.
+          setTimeout(() => triggerBrowserDownload(`${r.url}${r.url.includes('?') ? '&' : '?'}ticket=${result.value}`), started.length * 800);
+          started.push(r.label);
+        } else {
+          const reason = (result.reason as any)?.response?.data?.error || 'Impossible de préparer le téléchargement.';
+          notify(requests.length > 1 ? `${r.label} : ${reason}` : reason, 'error');
+        }
+      });
 
-      notify(
-        requests.length === 1
-          ? `Téléchargement lancé : ${requests[0].label}`
-          : `${requests.length} téléchargements lancés`,
-        'success'
-      );
-      if (requests.length > 1) {
+      if (started.length === 1) notify(`Téléchargement lancé : ${started[0]}`, 'success');
+      if (started.length > 1) {
+        notify(`${started.length} téléchargements lancés`, 'success');
         notify('Si ton navigateur le demande, autorise les téléchargements multiples.', 'info');
       }
-      return true;
+      return started.length > 0;
     },
     [notify]
   );
